@@ -1,0 +1,15 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "25 2 2023"
+output: html_document
+---
+
+```{r}
+#load epiwraps library
+library(epiwraps)
+
+#print session info
+sessionInfo()
+```
+
