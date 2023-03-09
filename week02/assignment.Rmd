@@ -1,0 +1,137 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "8 3 2023"
+output: html_document
+---
+
+# Week2: Genome builds, transcriptome assemblies and annotations
+
+## Exercise2: AnnotationsHub, Genomic Range, Features and their manipulation in R
+
+```{r}
+#load libraries
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(ensembldb)
+  library(GenomicRanges)
+  library(epiwraps)
+})
+```
+
+### AnnotationHub
+Using AnnotationHub, find and download the following annotations data:
+○ The mouse (Mus Musculus) EnsDb object, version 102, genome build GRCm38
+○ The mouse genome sequence ( dna_sm ) in TwoBit/2bit format for GRCm38
+○ The drosophila melanogaster genome sequence ( dna_sm ) in TwoBit/2bit format for BDGP6
+
+#### find and dowload mouse (Mus musculus) EnsDb object, version 102, genome build GRCm38
+```{r}
+
+ah <- AnnotationHub()
+q <- query(ah, c("Mus musculus", "EnsDb", "version 102","GRCm38"))
+q #only 1 record found: AH89211
+ensdb_m102 <- ah[["AH89211"]]
+ensdb_m102
+
+```
+#### find and dowload mouse genome sequence (dna_sm) in TwoBit/2bit format for GRCm38
+```{r}
+
+#ah <- AnnotationHub()
+q <- query(ah, c("Mus musculus", "dna_sm", "2bit", "GRCm38"))
+q #19 records found, I decided for the most recent entry: AH88477
+ensdb_m2bit <- ah[["AH88477"]]
+ensdb_m2bit
+
+```
+
+#### find and dowload drosophila melanogaster genome sequence ( dna_sm ) in TwoBit/2bit format for BDGP6
+```{r}
+
+#ah <- AnnotationHub()
+q <- query(ah, c("Drosophila melanogaster", "dna_sm", "2bit", "BDGP6"))
+q #24 entries, I decided for the most recent entry: AH106160
+ensdb_d2bit <- ah[["AH106160"]]
+ensdb_d2bit
+```
+
+### mouse EnsDb
+Using the mouse EnsDb, find the following:
+○ How many different ensembl gene IDs and gene symbols are there for protein-coding genes?
+○ Plot the distribution of the (spliced) length of protein-coding transcripts
+■ (tip: this will require you to extract exons of protein-coding transcripts from the database, and split them by transcript, before summing the width of the exons of each transcript)
+
+#### how many different ensemble gene IDs and gene symbols are there for protein coding genes?
+
+```{r}
+#extract genes from ensdb_m102
+gns_m102 <- genes(ensdb_m102)
+gns_m102 #there are total 56305 genes
+#View(gns_m102)
+
+#How many different ensembl gene IDs and gene symbols are there for protein-coding genes?
+table(gns_m102$gene_biotype) #overview of all counts for all biotypes
+table(gns_m102$gene_biotype == "protein_coding") #22287 protein-coding genes in total
+
+#extract all protein coding genes with gene_id, symbol and gene_biotype
+gns_m102_proco <- genes(ensdb_m102, column=c("gene_id","symbol","gene_biotype"), 
+                    filter=GeneBiotypeFilter("protein_coding"))
+gns_m102_proco
+
+#number of different gene IDs
+gns_m102_proco_geneid_uniq <- unique(gns_m102_proco$gene_id)
+length(gns_m102_proco_geneid_uniq) #all 22287 gene IDs are unique
+
+#number of different symbols
+gns_m102_proco_symbol_uniq <- unique(gns_m102_proco$symbol)
+length(gns_m102_proco_symbol_uniq) #21964 symbols are unique == different from the others
+
+#sanity-check: number of different biotypes
+#gns_m102_proco_biotype_uniq <- unique(gns_m102_proco$gene_biotype)
+#length(gns_m102_proco_biotype_uniq) #returns 1, so seems to work :)
+
+
+```
+
+
+#### Plot the distribution of the spliced length of protein-coding transcripts
+(tip: this will require you to extract exons of protein-coding transcripts from the database, and split them by transcript, before summing the width of the exons of each transcript)
+
+```{r}
+
+#extract transcripts from ensdb_m102
+txs_m102 <- transcripts(ensdb_m102)
+txs_m102 #there are total 144778 transcripts
+
+#View(txs_m102)
+table(txs_m102$tx_biotype == "protein_coding") #60320 protein-coding transcripts in total
+
+# only use exons from the protein-coding transcripts, split by transcript
+m102exsPerTx <- exonsBy(ensdb_m102, column=c("tx_id","tx_biotype"), 
+                    filter=TxBiotypeFilter("protein_coding"))
+#View(ensdb_m102)
+m102exsPerTx
+#View(m102exsPerTx)
+
+#access the width of all transcripts
+width(m102exsPerTx)
+
+#put sum of widths into new variable
+sw_m102exsPerTx <- sum(width(m102exsPerTx))
+head(sw_m102exsPerTx) #shows summed-up width for each transcript
+
+summary(sw_m102exsPerTx) #width ranges from 14 bp to 123179 bp, mean is 2424 bp
+
+sw_m102exsPerTx_frame <- as.data.frame(sw_m102exsPerTx)
+head(sw_m102exsPerTx_frame$sw_m102exsPerTx)
+
+hist(sw_m102exsPerTx_frame$sw_m102exsPerTx, 
+     breaks=200,
+     main= "Summed width of exons of each protein-coding transcript",
+     xlab="summed width [bp]",
+     xlim=c(0,150000))
+
+```
+
+
