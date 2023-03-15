@@ -1,0 +1,119 @@
+---
+title: "assignment_week3"
+author: "Rebecca Waag"
+date: "15 3 2023"
+output: html_document
+---
+
+# Week3: Overview of NGS chromatin assays and their analyses
+
+## Exercise3: Primary ChIP-Seq analysis pipeline
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rsubread)
+  library(rtracklayer)
+  library(Biostrings)
+  library(Rfastp)
+  library(epiwraps)
+})
+ah <- AnnotationHub()
+```
+
+### Read in raw files
+
+```{r}
+#change working directory
+setwd("/mnt/bohacek/rebecca/data/R EpiCourse/week03")
+
+```
+
+### Read QC and trimming
+
+
+```{r, eval=FALSE}
+#create output folder
+dir.create("rfastp.trimmed")
+#perform simultaneous qc and trimming using Rfastp
+qc <- lapply(c(CTCF="raw/ENCFF127RRR.fastq.gz"), FUN=function(x){
+  Rfastp::rfastp(x, thread=4, overrepresentationAnalysis=TRUE,
+                 outputFastq=file.path("rfastp.trimmed/",gsub("\\.fastq\\.gz$","",basename(x))))
+})
+```
+
+Run quality in general doesn't seem too great, mostly Q20 bases, no Q30 ones. Duplication rate: 27.9695% (maybe overestimated)
+
+
+```{r}
+#Inspect how data quality changed due to trimming
+#Rfastp::curvePlot(qc$CTCF, curve="content_curves")
+#Rfastp::curvePlot(qc$CTCF, curve="quality_curves")
+```
+Quality of data slightly improved due to trimming. No overrepresented sequences found anymore. 
+
+
+### Build a genome index for mapping
+
+```{r, eval=FALSE}
+# get the genome sequence from AnnotationHub
+genome <- ah[["AH49674"]]
+# create a new directory that will contain the genome index
+dir.create("BDGP6_genome")
+# write the genome sequence in fasta format
+export(import.2bit(genome), "BDGP6_genome/genome.fasta.gz", compress=TRUE)
+# build a Rsubread index
+Rsubread::buildindex("BDGP6_genome/rsubread", reference="BDGP6_genome/genome.fasta.gz")
+```
+
+### Alignment
+
+```{r, eval=FALSE}
+#create output folder
+dir.create("aligned")
+#perform alignment
+align.stats <- Rsubread::align(index="BDGP6_genome/rsubread", type="dna",
+                               readfile1="rfastp.trimmed/ENCFF127RRR_R1.fastq.gz",
+                               output_file="aligned/CTCF.bam",
+                               nthreads=6, sortReadsByCoordinates=TRUE)
+#show stats
+align.stats #3.5 Mio Reads (91.8%) were mapped
+```
+
+From the total of ~3.8 Mio Reads, ~3.5 Mio Reads (91.8%) were mapped (precisely: 3504759 reads)
+
+(3 Mio reads were mapped uniquely)
+
+### Peak calling
+
+```{r, eval=FALSE}
+#create output folder
+dir.create("peaks")
+#perform peak calling
+peaks <- callPeaks("aligned/CTCF.bam", fragLength=50L) #2857 peaks found
+# save as a bed file
+rtracklayer::export.bed(peaks, "peaks/peaks.bed")
+```
+Reports 2857 peaks found
+
+(1619 pass FDR 0.05, but no control was used, so probably not calibrated) 
+
+Peaks were inspected in IGV together with Bam/bam.bai files.
+
+### Inspect peaks and visualize one peak
+
+```{r}
+#import peaks in bed file
+peaks<- rtracklayer::import("peaks/peaks.bed")
+
+#head(peaks)
+#View(peaks)
+peaks #2857 peaks found
+
+#select peak of interest and plot coverage of bam file in that region
+region<- as.character(granges(peaks[30]))
+plotSignalTracks(c(CTCF="aligned/CTCF.bam"),region=region)
+
+```
+
+The file "peaks" contains 2857 peaks as well 
