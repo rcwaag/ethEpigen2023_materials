@@ -1,0 +1,99 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "22 3 2023"
+output: html_document
+---
+
+# Week4: Specificities and QCs on primary analysis
+
+## Assignment4: Finding data from the literature
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(rtracklayer)
+  library(epiwraps)
+  library(GenomicRanges)
+})
+ah <- AnnotationHub()
+```
+
+### Find and download peaks from ENCODE
+
+- mESC
+- TF p300
+- histone modifications: H3K4me3, H3K4me1, H3K27ac & H3K27me3
+
+```{r}
+#download p300 peaks
+download.file("https://www.encodeproject.org/files/ENCFF653YVR/@@download/ENCFF653YVR.bed.gz",dest="p300.bed.gz")
+p300<-rtracklayer::import("p300.bed.gz", format="narrowPeak")
+head(p300)
+
+#download H3K4me3 peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF247GVM/@@download/ENCFF247GVM.bed.gz",dest="H3K4me3.bed.gz")
+H3K4me3<-rtracklayer::import("H3K4me3.bed.gz", format="narrowPeak")
+head(H3K4me3)
+
+#download H3K4me1 peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF333IJH/@@download/ENCFF333IJH.bed.gz",dest="H3K4me1.bed.gz")
+H3K4me1<-rtracklayer::import("H3K4me1.bed.gz", format="narrowPeak")
+head(H3K4me1)
+
+#download H3K27ac peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF360VIS/@@download/ENCFF360VIS.bed.gz",dest="H3K27ac.bed.gz")
+H3K27ac<-rtracklayer::import("H3K27ac.bed.gz", format="narrowPeak")
+head(H3K27ac)
+
+#download H3K27me3 peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF105NKG/@@download/ENCFF105NKG.bed.gz",dest="H3K27me3.bed.gz")
+H3K27me3<-rtracklayer::import("H3K27me3.bed.gz", format="narrowPeak")
+head(H3K27me3)
+
+```
+
+
+### What proportion of p300 peaks overlaps with each of the marks?
+
+```{r}
+#how many of p300 peaks overlap with histone marks
+
+#H3K4me3
+p300OverlapsH3K4me3 <- overlapsAny(p300, H3K4me3)
+#table(p300OverlapsH3K4me3)
+#sum(p300OverlapsH3K4me3)
+prop_p300_H3K4me3 <- sum(p300OverlapsH3K4me3) / length(p300) *100
+prop_p300_H3K4me3
+
+#H3K4me1
+p300OverlapsH3K4me1 <- overlapsAny(p300, H3K4me1)
+#table(p300OverlapsH3K4me1)
+#sum(p300OverlapsH3K4me1)
+prop_p300_H3K4me1 <- sum(p300OverlapsH3K4me1) / length(p300) *100
+prop_p300_H3K4me1
+
+#H3K27ac
+p300OverlapsH3K27ac <- overlapsAny(p300, H3K27ac)
+#table(p300OverlapsH3K27ac)
+#sum(p300OverlapsH3K27ac)
+prop_p300_H3K27ac <- sum(p300OverlapsH3K27ac) / length(p300) *100
+prop_p300_H3K27ac
+
+#H3K27me3
+p300OverlapsH3K27me3 <- overlapsAny(p300, H3K27me3)
+#table(p300OverlapsH3K27me3)
+#sum(p300OverlapsH3K27me3)
+prop_p300_H3K27me3 <- sum(p300OverlapsH3K27me3) / length(p300) *100
+prop_p300_H3K27me3
+
+```
+Of the p300 peaks, 
+- 35.5 % overlap with H3K4me3 peaks
+- 28.1 % overlap with H3K4me1 peaks
+- 54.9 % overlap with H3K27ac peaks
+- 0.19 % overlap with H3K27me3 peaks.
