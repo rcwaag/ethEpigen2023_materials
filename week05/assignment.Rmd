@@ -1,0 +1,91 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "25 3 2023"
+output: html_document
+---
+# Week5: Functional elements & the histone code
+
+## Assignment5: Visualization and exploration of histone modifications
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(rtracklayer)
+  library(epiwraps)
+  library(GenomicRanges)
+})
+#ah <- AnnotationHub()
+```
+
+
+```{r}
+setwd("/mnt/bohacek/rebecca/data/R EpiCourse/week05/Assignment")
+```
+
+### Identify bivalent domains (H3K27me3 + H3K4me3) in mESCs
+
+download histone marks H3K4me3 and H3K27m3 peaks from mESCs
+```{r}
+#create peaks folder
+dir.create("peaks_mESC")
+
+#download H3K27me3 peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF105NKG/@@download/ENCFF105NKG.bed.gz",dest="peaks_mESC/H3K27me3.bed.gz")
+H3K27me3<-rtracklayer::import("peaks_mESC/H3K27me3.bed.gz", format="narrowPeak")
+head(H3K27me3)
+
+#download H3K4me3 peaks
+#I decided to go with the replicated peaks
+download.file("https://www.encodeproject.org/files/ENCFF331RHM/@@download/ENCFF331RHM.bed.gz",dest="peaks_mESC/H3K4me3.bed.gz")
+H3K4me3<-rtracklayer::import("peaks_mESC/H3K4me3.bed.gz", format="narrowPeak")
+head(H3K4me3)
+```
+
+Identify bivalent domains, those positive for both H3K4me3 and H3K27me3
+
+```{r}
+#calculate regions where H3K4me3 overlaps H3K27me3
+H3K4me3verlapsH3K27me3 <- overlapsAny(H3K4me3, H3K27me3)
+table(H3K4me3verlapsH3K27me3) #3105 overlapping regions
+
+#save overlapping/bivalent regions into new GRanges object
+peaks_biv <- H3K4me3[H3K4me3verlapsH3K27me3]
+peaks_biv #GRanges with 3105 ranges
+
+```
+
+### What happens to those regions upon differentiation?
+
+```{r}
+#create peaks folder
+dir.create("peaks_diff")
+
+#download differentiated cell (myocyte) peaks in mESCs for both histone marks
+#myocyte originated from C2C12
+#H3K4me3
+download.file("https://www.encodeproject.org/files/ENCFF207OXY/@@download/ENCFF207OXY.bed.gz",dest="peaks_diff/H3K4me3_diff.bed.gz")
+H3K4me3_diff<-rtracklayer::import("peaks_diff/H3K4me3_diff.bed.gz", format="narrowPeak")
+head(H3K4me3_diff)
+
+#H3K27me3
+download.file("https://www.encodeproject.org/files/ENCFF561RIZ/@@download/ENCFF561RIZ.bed.gz",dest="peaks_diff/H3K27me3_diff.bed.gz")
+H3K27me3_diff<-rtracklayer::import("peaks_diff/H3K27me3_diff.bed.gz", format="narrowPeak")
+head(H3K27me3_diff)
+```
+
+Visualize the overlap
+
+```{r}
+#combine the bivalent regions of mESC with the H3K4me3 and H3K27me3 of differentiated cell peaks into one Grangeslist
+peaks <- GRangesList("H3K4me3_diff" = H3K4me3_diff, "H3K27me3_diff" = H3K27me3_diff, "peaks_biv" = peaks_biv)
+peaks
+
+#Visualize all overlaps between the three datasets in one Upset plot
+regionUpset(peaks)
+
+#Use bivalent peaks as a reference for plotting
+regionUpset(peaks, reference = peaks$peaks_biv)
+```
+From the 3105 bivalent domains (==H3K4me3 overlapped H3K27me3 in mESCs), 1335 overlap with H3K27me3 in differentiated cells, 917 regions overlap with only H3K4me3 marks and only 198 regions are still positive for both H3K4me3 and H3K27me3 marks. 655 bivalent domains show no overlap with either of the two marks in differenciated cells. 
