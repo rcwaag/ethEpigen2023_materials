@@ -1,0 +1,125 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "4 4 2023"
+output: html_document
+---
+# Week6: Types of transcriptional regulators, modes and dynamics of their binding
+
+## Exercise6: Motif analysis
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(GenomicRanges)
+  library(ggplot2)
+  library(memes) #for meme-based methods
+  library(motifmatchr)
+  library(Biostrings) #for handling sequences
+  library(MotifDb) #database of motifs
+  library(TFBSTools) #for handling some motif formats
+  library(universalmotif) #for converting motifs to various formats
+  library(PWMEnrich) #for R-based motif enrichment analysis
+})
+```
+
+```{r}
+#create folder for assignment
+dir.create("/mnt/bohacek/rebecca/data/R EpiCourse/week06/assign")
+#change working directory
+setwd("/mnt/bohacek/rebecca/data/R EpiCourse/week06/assign")
+```
+
+### Choose a transcription factor and download peaks
+
+Analysis will be performed on the TF REST in myocytes
+
+```{r}
+#download REST peaks
+download.file("https://www.encodeproject.org/files/ENCFF368VWJ/@@download/ENCFF368VWJ.bed.gz", "myocyte_REST_ENCFF368VWJ.bed.gz")
+#import peaks
+peaks_REST <- rtracklayer::import("myocyte_REST_ENCFF368VWJ.bed.gz", format="NarrowPeak")
+peaks_REST #GRanges object with 3555 ranges==peaks
+seqlevelsStyle(peaks_REST) <- "Ensembl"  #change convention of the chromosome names to ensembl (e.g. chr2 is renamed in 2)
+peaks_REST #seqnames changed, "chr2" is now only "2"
+
+```
+
+### Identify instances of factor's motif
+
+
+```{r}
+#check width of REST peaks
+#View(peaks_REST)
+#hist(width(peaks_REST))
+summary(width(peaks_REST)) #mean 142bp
+#extract regions around the center of the peaks with width 100
+peak_REST_centers <- resize(peaks_REST, fix="center", width=100)
+peak_REST_centers
+summary(width(peak_REST_centers)) #mean is 100bp now
+
+#get genome sequence:
+ah <- AnnotationHub(localHub=TRUE)
+genome <- ah[["AH68356"]]
+
+#get the sequences corresponding to the peak centers
+peak_REST_seqs <- memes::get_sequence(peak_REST_centers, genome)
+peak_REST_seqs #DNAStringSet object of length 3555
+#show first sequence
+#as.character(peak_REST_seqs[1])
+```
+#### Motif scanning
+
+```{r}
+#find REST motif
+#search for "REST" in the motif database
+motifs_REST <- query(MotifDb, "REST")
+names(motifs_REST) #several matching motifs available
+#select the first motif
+motif_REST <- motifs_REST[["Mmusculus-HOCOMOCOv10-REST_MOUSE.H10MO.A"]]
+#visualize motif
+view_motifs(motif_REST)
+```
+
+
+```{r}
+#scanning a set of sequences using Meme
+#find instances of motif in REST peaks using FIMO, scan input sequences to find positions that match motif
+motif_in_REST <- memes::runFimo(peak_REST_seqs,  convert_motifs(motif_REST), meme_path = "/common/meme/bin/")
+head(motif_in_REST)
+#motif_in_REST #2162 ranges
+#width(motif_in_REST) #width of each identified position is 21bp, exactly like REST motif
+```
+
+#### Of all the peaks, what proportion contains a motif for the factor
+
+```{r}
+# peaks with motif:
+#subset overlap between all REST peaks and REST peaks with motifs
+peaks_REST_w_motif <- peaks_REST[overlapsAny(peaks_REST,motif_in_REST)]
+length(peaks_REST_w_motif) #1928 REST peaks contain the REST motif
+length(peaks_REST) #3555 REST peaks in total
+length(peaks_REST_w_motif)/length(peaks_REST) #0.5423347
+```
+Of the 3555 peaks, 1928 (54.23 %) contain a motif.
+
+#### Of all instances of that motif in the genome, what proportion is bound by a factor?
+
+```{r}
+#calculate number of motif occurrences in whole genome
+#import genome
+genome <- rtracklayer::import(genome)
+class(genome) #DNAStringSet, Biostrings
+
+#find instances of motif in whole genome
+motif_in_genome <- memes::runFimo(genome,  convert_motifs(motif_REST), meme_path = "/common/meme/bin/")
+head(motif_in_genome)
+length(motif_in_genome) #636546 motif occurrences in whole genome
+
+#subset all motifs in genome by overlaps with the previously calculated motif instances in REST peaks for calculating the proportion of motif instances bound by the TF REST 
+motif_in_peaks_REST <- motif_in_genome[overlapsAny(motif_in_genome, motif_in_REST)]
+length(motif_in_peaks_REST) #2173 motif occurrences in REST peaks
+length(motif_in_peaks_REST)/length(motif_in_genome) #0.003413
+```
+
+Of the 636546 motif instances, 2173 (0.003413 %) overlap with a peak
