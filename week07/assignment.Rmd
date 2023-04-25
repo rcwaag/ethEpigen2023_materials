@@ -1,0 +1,114 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "22 4 2023"
+output: html_document
+---
+# Week7: DNA accessibility, nucleosome positioning, and TF footprints
+
+## Exercise7: Analysis and exploration of ATAC-seq data
+
+In the same ATAC data on chr19, plot the insertion (i.e. cuts) profiles of nucleosome-free and nucleosome-containing fragments, around the high confidence motifs of two factors
+
+```{r}
+#load libraries
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(MotifDb)
+  library(memes)
+  library(universalmotif)
+  library(ensembldb)
+  library(ggplot2)
+})
+ah <- AnnotationHub(localHub=TRUE)
+```
+
+### Load data
+
+```{r, eval=FALSE}
+#load ATAC from chromosome 19
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam", "atac.chr19.bam")
+download.file("https://ethz-ins.org/content/w7/atac.chr19.bam.bai", "atac.chr19.bam.bai")
+```
+
+### Preparing tracks
+
+split fragments and prepare bigwig for NSF and nucleosized fragments separately and look at insertion sites
+
+```{r}
+#save bam file in new object
+bam <- "atac.chr19.bam"
+
+#nucleosome-free fragments:
+#create track of cuts/insertion sites at each position of only nucleosome-free fragments
+bam2bw(bam, output_bw = "NF_cuts.bw", paired=TRUE, binWidth=1L, type="ends", minFragLength=30, maxFragLength=120, shift=c(4L,-5L), forceSeqlevelsStyle = "Ensembl")
+
+#all nucleosome fragments:
+#create track of cuts/insertion sites at each position using all nucleosome fragments (I decided to use 500 as a max. fragment length)
+bam2bw(bam, output_bw = "nuc_cuts.bw", paired=TRUE, binWidth=1L, minFragLength=140, maxFragLength=500, type="ends", shift=c(4L,-5L), forceSeqlevelsStyle = "Ensembl")
+
+#read tracks into new object
+tracks_cut <- c("Insertion profile nucleosome-free fragments"="NF_cuts.bw", "Insertion profile of nucleosome-containing fragments"="nuc_cuts.bw")
+#calculate normalization factor
+nf <- bwNormFactors(tracks_cut, wsize=5L, useSeqLevels="19", nwind=5000L)
+```
+
+### Load genome
+
+```{r}
+#load genome
+genome <- ah[["AH68356"]]
+# get the sequence for chr19:
+chr19 <- import(genome)["19"]
+```
+
+### Visualize signal around KLF4 motif occurences
+
+```{r}
+# get KLF4 motif
+motif_KLF4 <- query(MotifDb, c("KLF4","Mus"))[[1]]
+#view_motifs(motif_KLF4)
+#ncol(motif_KLF4) #motif has size of 12 bp
+
+#convert motif for use with motifmatchr functions
+motif_KLF4 <- convert_motifs(motif_KLF4, class="TFBSTools-PFMatrix")
+
+# find motif occurences/positions using matchMotifs
+motif_occ_KLF4 <- motifmatchr::matchMotifs(motif_KLF4, chr19, out="positions", p.cutoff=1e-5)[[1]]
+# convert to GRanges
+motif_occ_KLF4 <- as(setNames(motif_occ_KLF4, names(chr19)), "GRanges")
+
+#read signal of ATAC cuts around KLF4 motif
+sm_KLF4 <- signal2Matrix(tracks_cut, motif_occ_KLF4, w=5, extend=500)
+#apply normalization factor
+smb_KLF4 <- rescaleSignalMatrices(sm_KLF4, nf)
+
+#plot heatmap of normalized regions
+plotEnrichedHeatmaps(smb_KLF4, color=c("white", "darkred"),minRowVal = 5)
+```
+
+### Visualize signal around MAZ motif occurences
+
+```{r}
+# get MAZ motif
+motif_MAZ <- query(MotifDb, c("MAZ","Mus"))[[1]]
+#view_motifs(motif_MAZ)
+#ncol(motif_MAZ) #motif has size of 17 bp
+
+#convert motif for use with motifmatchr functions
+motif_MAZ <- convert_motifs(motif_MAZ, class="TFBSTools-PFMatrix")
+
+# find motif occurences/positions using matchMotifs
+motif_occ_MAZ <- motifmatchr::matchMotifs(motif_MAZ, chr19, out="positions", p.cutoff=1e-5)[[1]]
+# convert to GRanges
+motif_occ_MAZ <- as(setNames(motif_occ_MAZ, names(chr19)), "GRanges")
+
+#read signal of ATAC cuts around KLF4 motif
+sm_MAZ <- signal2Matrix(tracks_cut, motif_occ_MAZ, w=5, extend=500)
+#apply normalization factor
+smb_MAZ <- rescaleSignalMatrices(sm_MAZ, nf)
+
+#plot heatmap of normalized regions
+plotEnrichedHeatmaps(smb_MAZ, color=c("white", "darkred"), minRowVal = 5)
+```
