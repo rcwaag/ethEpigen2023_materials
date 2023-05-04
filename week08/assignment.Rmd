@@ -1,0 +1,256 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "28 4 2023"
+output: html_document
+---
+
+# Week8: Differential analysis
+
+## Exercise8: Differential analysis
+
+Perform two differential motif accessibility analyses (stress effects and sex effects) on ATAC-seq peak counts in the hippocampus upon stress.
+
+```{r}
+#load packages
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(AnnotationHub)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(sechm)
+  library(BiocParallel)
+  library(ggplot2)
+  library(chromVAR) #for motif accessibility estimation
+  library(SummarizedExperiment) #data structure
+  library(limma) #for statistical analysis
+  library(stringr) #for word function
+})
+
+#control multithreading with unix
+register(MulticoreParam(4))
+```
+
+```{r}
+#set working directory
+setwd("/mnt/bohacek/rebecca/training/Bioinformatic Approaches Epigenomics/week08")
+```
+
+
+### Load data
+
+Download ATAC-seq peak counts in the hippocampus upon stress (subset of the original data, already in SummarizedExperiment format).
+
+```{r}
+#download data
+#download.file("https://ethz-ins.org/content/mouse_mm38_hippocampus.peakCounts.SE.rds", "StressHippo.peakCounts.SE.rds", mode="wb")
+HCStress <- readRDS("StressHippo.peakCounts.SE.rds")
+
+#Explore object
+#class(HCStress) #RangedSummarizedExperiment
+#HCStress #12 samples with 20660 peaks, contains 1 assay
+#head(colData(HCStress)) #sequencing depth for each sample is saved in the object
+#rowRanges(HCStress) #contains seqnames, ranges and strand information
+colnames(HCStress)
+
+#remove ending .bam from colnames
+#colnames(HCStress) <- gsub(".bam", "", as.vector(colnames(HCStress))
+
+#extract group from filename and add as metadata
+HCStress$group <- word(colnames(HCStress), 1, sep = "_")
+HCStress$group
+
+#extract sex from filename and add as metadata
+HCStress$sex<-word(colnames(HCStress), 2, sep = "_")
+HCStress$sex
+
+#add group and sex manually
+#HCStress$group <- c("control", "control", "control", "control", "control", "control", "FSS", "FSS", "FSS", "FSS", "FSS", "FSS")
+#HCStress$sex <- c("female", "female", "female", "male", "male", "male", "female", "female", "female", "male", "male", "male")
+```
+
+### Load genomic sequence
+
+```{r}
+#load genome sequence GRCm38
+ah <- AnnotationHub(localHub = TRUE)
+mm38 <- ah[["AH68356"]]
+#class(mm38) #2.bit format, does not work with chormVar:addGCBias
+
+#export as fasta format
+#Biostrings::writeXStringSet(rtracklayer::import(mm38), "mm38.fa")
+
+#load mm38 fasta file
+genome_mm38 <- Rsamtools::FaFile("mm38.fa")
+class(genome_mm38) #FaFile
+```
+
+### Add GC bias zu SummarizedExperiment object
+
+```{r}
+#add GC bias to the object
+HCStress<-chromVAR::addGCBias(HCStress, genome=genome_mm38)
+rowRanges(HCStress) #bias column added
+```
+
+### Get database of motifs
+
+```{r}
+#which databases exist for Mus musculus
+motifs <- query(MotifDb, c("Mmusculus")) #outputs default output
+motifs #1427 entries in total from 8 sources
+
+#obtain HOCOMOCOv10 database of motifs
+motifs <- query(MotifDb, c("HOCOMOCOv10", "Mmusculus")) #outputs default output
+#motifs #contains 426 entries
+
+#convert motif into PWMatrix format
+motifs <- do.call(TFBSTools::PWMatrixList, setNames(
+           universalmotif::convert_motifs(motifs, class="TFBSTools-PWMatrix"),
+           mcols(motifs)$geneSymbol)) #only keep geneSymbol as name
+head(motifs) #correctly named
+```
+
+### Get occurrence of each motif in each peak
+
+```{r}
+#find which peaks contain which motifs
+moi<-motifmatchr::matchMotifs(motifs, subject=HCStress, genome=genome_mm38)
+moi #output is a matriux instead of GRanges
+#length(motifs)
+head(assay(moi))
+#as.matrix(head(assay(moi)))
+```
+
+### Calculate aggregated motif score per sample
+
+```{r}
+#create aggregated motif score per sample
+dev_stress <-chromVAR::computeDeviations(object=HCStress, 
+                                 annotations=moi, 
+                                 background_peaks=getBackgroundPeaks(HCStress, niterations=1000))
+
+dev_stress #contains genenames as rownames and 2 assays (deviations and z-scores)
+
+
+#variability<-computeVariability(dev) #gives error due to duplicate row.names
+#plotVariability(variability)
+```
+
+### Normalization
+
+```{r}
+head(assays(dev_stress)$z)
+#add new assay for normalization
+assays(dev_stress)$norm<-scale(assays(dev_stress)$z)
+dev_stress #new norm assay added
+```
+
+### Differential motif accessibility analysis: Stress effects?
+
+Here, we exclusively model the effect of stress in the dataset, not taking into account the different sexes used for the experiment. 
+
+```{r}
+#use group as factor
+dev_stress$group<-factor(dev_stress$group)
+dev_stress$group
+
+#set control as baseline to model the effect of stress, not necessary here
+#dev_stress$group<-relevel(dev_stress$group, ref ="control")
+
+#specify a linear model
+mm_group <- model.matrix(~group, data=as.data.frame(colData(dev_stress)))
+
+#fit the model
+fit_group <- lmFit(assays(dev_stress)$norm, mm_group)
+
+#calculate the t-statistics
+fit_group <- eBayes(fit_group)
+
+#summarize results
+res_group <- as.data.frame(topTable(fit_group), coef="group", number=Inf)
+head(res_group)
+
+#subset sign. altered TFs into new object
+res_group_DE<-subset(res_group, res_group$adj.P.Val<0.05)
+nrow(res_group_DE) #the activity of 2 TFs seems to significantly differ between the sexes
+
+#subsetting sign. up and downregulated TFs
+res_group_DE_up<-subset(res_group_DE, res_group_DE$logFC>0)
+nrow(res_group_DE_up) #2 of the motifs are more accessible
+res_group_DE_down<-subset(res_group_DE, res_group_DE$logFC<0)
+nrow(res_group_DE_down) #0 of the motifs are less accessible
+
+#manually remove duplicates
+res_group <- res_group[-c(6,7),]
+
+#save TF name from ID as separate TF column
+res_group$TF<-res_group$ID
+head(res_group$TF)
+ggplot(res_group, aes(logFC, -log10(adj.P.Val), label=TF))+geom_text()
+
+ancols<-list(group=c(control="blue", FSS="black"),
+             sex=c(male="green", female="orange"))
+
+#use TF names as row names
+res_group <- data.frame(res_group, row.names = res_group[,1])
+
+#use sechm to plot heatmaps of normalized accessibility scores
+#sechm(dev_stress, features=head(row.names(res_group)), assayName="norm", cluster_cols=TRUE, hmcols=c("#679186", "#FDEBD3", "#f2624f"))
+sechm(dev_stress, features=head(row.names(res_group)), assayName="norm", cluster_cols=TRUE, hmcols=c("#679186", "#FDEBD3", "#264E70"))
+```
+Differential motif accessibility analysis modeling the effect of stress (not taking sex effects into account) reveals 2 significantly altered accessible motifs between the control and stress group. Of these 2 motifs, 2 are more accessible in the stress group compared to the control group (0 are less accessible).
+
+### Differential motif accessibility analysis: Sex effects?
+
+Here, we exclusively model the effect of sex in the dataset, not taking into account stress effects that might influence the sex effect. 
+
+```{r}
+#use sex as factor
+dev_stress$sex<-factor(dev_stress$sex)
+
+#set female as baseline to model the effect of stress, not necessary here
+#dev_stress$sex<-relevel(dev_stress$sex, ref ="female")
+
+#specify a linear model
+mm_sex <- model.matrix(~sex, data=as.data.frame(colData(dev_stress)))
+
+#fit the model
+fit_sex <- lmFit(assays(dev_stress)$norm, mm_sex)
+
+#calculate the t-statistics
+fit_sex <- eBayes(fit_sex)
+
+#summarize results
+res_sex <- as.data.frame(topTable(fit_sex), coef="sex", number=Inf)
+head(res_sex)
+
+#subset sign. altered TFs into new object
+res_sex_DE<-subset(res_sex, res_sex$adj.P.Val<0.05)
+nrow(res_sex_DE) #the activity of 10 TFs seems to significantly differ between the sexesc
+
+#subsetting sign. up and downregulated TFs
+res_sex_DE_up<-subset(res_sex_DE, res_sex_DE$logFC>0)
+nrow(res_sex_DE_up) #0 of the motifs are more accessible
+res_sex_DE_down<-subset(res_sex_DE, res_sex_DE$logFC<0)
+nrow(res_sex_DE_down) #10 of the motifs are less accessible
+
+#save TF name from ID as separate TF column
+res_sex$TF<-res_sex$ID
+head(res_sex$TF)
+ggplot(res_sex, aes(logFC, -log10(adj.P.Val), label=TF))+geom_text()
+
+#use TF names as row names
+res_sex <- data.frame(res_sex, row.names = res_sex[,1])
+
+#use sechm to plot heatmaps of normalized accessibility scores
+res_sex <- data.frame(res_sex, row.names = res_sex[,1])
+#sechm(dev_stress, features=head(row.names(res_sex)), assayName="norm", top_annotation=c("sex"), cluster_cols=TRUE, hmcols=c("#679186", "#FDEBD3", "#f2624f"))
+sechm(dev_stress, features=head(row.names(res_sex)), assayName="norm", top_annotation=c("sex"), cluster_cols=TRUE, hmcols=c("#679186", "#FDEBD3", "#264E70"))
+```
+
+Differential motif accessibility analysis modeling the effect of sex (not taking stress effects into account) reveals 10 significantly altered accessible motifs between males and females. Of these 10 motifs, 10 are less accessible in males compared to females (0 are more accessible).
+
+However, no statement can be made on sex-specific stress effects as this was not modeled here. 
+
