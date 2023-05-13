@@ -1,0 +1,141 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "12 5 2023"
+output: html_document
+---
+
+# Week10: From repression to expression and back
+
+## Exercise10: Clustering genomic signals and characterizing the clusters
+
+Use clustering and visualization to illustrate the relationship between the binding of the different Creb proteins. Use enrichment analysis (either GO or motif) on at least one of the clusters. Focus on high-confidence peaks from each factor to define the universe of regions.
+
+
+```{r}
+#load libraries
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ggplot2)
+  library(rGREAT) #find nearby genes, depending on distance from region
+})
+```
+
+### Load data
+
+```{r, eval=FALSE}
+#specify working directory
+setwd("/mnt/bohacek/rebecca/training/Bioinformatic Approaches Epigenomics/week10_assignment")
+
+#download data
+options(timeout = 6000)
+download.file("https://ethz-ins.org/content/w10.assignment.zip", "w10.assignment.zip")
+#unzip
+unzip("w10.assignment.zip")
+list.files()
+```
+
+### Prepare regions and tracks
+
+```{r}
+#specify working directory
+setwd("/mnt/bohacek/rebecca/training/Bioinformatic Approaches Epigenomics/week10_assignment")
+
+#read in bw file names
+tracks <- list.files(pattern="bw$")
+tracks
+
+#read in bed file names
+peaks <- list.files(pattern="bed$")
+peaks
+
+#import peaks
+peaks <- lapply(peaks, rtracklayer::import.bed)
+# focus on the high-quality peaks only
+peaks <- lapply(peaks, FUN=function(x) x[x$score>800]) #restrict peaks to those with score >800
+# obtain union of non-redundant regions
+regions <- reduce(unlist(GRangesList(peaks)))
+regions #GRanges with 2269 ranges, restricted to chr1
+```
+
+### Visualize signal across regions
+
+```{r}
+#plot heatmap
+m_creb <- signal2Matrix(tracks, regions, extend=2000)
+plotEnrichedHeatmaps(m_creb, colors=c("white","darkred"))
+```
+
+All ChIPs show a signal in the union on non-redundant regions. However, no clear patterns are emerging due to the default ordering of regions.
+
+### Cluster signal
+
+Clustering of the signal is performed to reveal hidden patterns.
+
+```{r}
+#set seed to ensure reproducibility of clustering
+set.seed(123)
+#clustering signal with kmeans into 3 clusters, the relative signal instead of absolute values is used
+cl_creb <- epiwraps::clusterSignalMatrices(m_creb, k=3, scaleRows=TRUE, seed=TRUE) #3 clusters explain 80% of variance
+
+#add cluster information to the GRanges object
+regions$clusters <- cl_creb
+#regions
+#compare number of regions in each cluster
+table(cl_creb)
+
+#define colors for clusters
+mycolors <-c("1"="slateblue3", "2"="sienna3", "3"="plum3")
+#plot heatmap with clusters
+plotEnrichedHeatmaps(m_creb, row_split=cl_creb, mean_color = mycolors, colors=c("white", "darkred"), scale_row="global")
+```
+
+Upon clustering using kmeans, clear patterns of Creb binding emerge. 
+The strongest signal of Creb1 can be found in cluster 1, Creb3 shows the strongest signal in cluster 3 and Creb3L1 shows the strongest signal in cluster 2.
+
+```{r}
+#overlay for one cluster all of the marks
+d<-meltSignals(m_creb, splitBy=cl_creb)
+head(d)
+ggplot(d, aes(position, mean, colour=sample))+geom_line() +facet_wrap(~split)
+```
+
+Each cluster of regions seems to be bound by all different Creb proteins, but to a different extent. Especially cluster 1 seems to predominantly contain regions that are bound by Creb1. 
+
+### Enrichment analysis
+
+For enrichment analysis, I focus on cluster 1 which show a very strong signal of Creb1 binding. 
+
+```{r}
+#split the regions by cluster
+split_regions <- split(regions, cl_creb)
+
+#send data to the GREAT server to run an enrichment analysis
+job_1 <- rGREAT::submitGreatJob(gr=split_regions[["1"]], bg=regions, species="hg38")
+res_1 <- rGREAT::getEnrichmentTables(job_1)
+#names(res_1)
+
+#plot the top Biological Processes
+bp_1 <- res_1$`GO Biological Process`
+#head(bp_1)
+ggplot(head(bp_1,15), aes(Hyper_Fold_Enrichment, reorder(name, Hyper_Adjp_BH), size=Hyper_Foreground_Region_Hits, color=-log10(Hyper_Adjp_BH))) + geom_point() + scale_color_viridis_c() + ggtitle("Cluster 1: Biological Processes")
+```
+
+Cluster 1 show a strong enrichment in negative regulation of signal transduction and negative regulation of signaling. Other enriched terms seem more arbitrary.
+
+We repeat the the enrichment analysis for cluster 3 that showed the strongest signal for Creb3.
+
+```{r}
+#send data to the GREAT server to run an enrichment analysis
+job_3 <- rGREAT::submitGreatJob(gr=split_regions[["3"]], bg=regions, species="hg38")
+res_3 <- rGREAT::getEnrichmentTables(job_3)
+#names(res_3)
+
+#plot the top Biological Processes
+bp_3 <- res_3$`GO Biological Process`
+#head(bp_3)
+ggplot(head(bp_3,15), aes(Hyper_Fold_Enrichment, reorder(name, Hyper_Adjp_BH), size=Hyper_Foreground_Region_Hits, color=-log10(Hyper_Adjp_BH))) + geom_point() + scale_color_viridis_c() + ggtitle("Cluster 3: Biological Processes")
+```
+
+Cluster 3 shows very different enrichment results, with the most interesting ones being (positive) regulation of interferon-gamma production.
