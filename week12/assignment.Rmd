@@ -1,0 +1,189 @@
+---
+title: "assignment"
+author: "Rebecca Waag"
+date: "26 5 2023"
+output: html_document
+---
+
+# Week12: Chromatin conformation, domains and looping
+
+## Exercise12: Working with distal regulatory elements
+
+```{r}
+#load packages
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(AnnotationHub)
+  library(ensembldb)
+  library(InteractionSet)
+  library(epiwraps)
+  library(GenomeInfoDb)
+})
+```
+
+### Download data
+
+Download JUND peaks from human ChIP experiment and predicted distal targets from Salviato et al. 2021
+
+```{r}
+#set working directory
+setwd("C:/Users/rebec/Desktop/w12")
+
+#download JUND peaks
+#download.file("https://www.encodeproject.org/files/ENCFF130QNO/@@download/ENCFF130QNO.bed.gz",dest="JUND.bed.gz")
+#import peaks
+JUND<-rtracklayer::import("JUND.bed.gz", format="narrowPeak")
+#head(JUND)
+#length(JUND) #22681 peaks
+
+#download predicted distal targets from Salviato et al. (2021)
+#download.file("https://ethz-ins.org/content/hg38.SalviatoDistalEnhancerTargets.GR.rds", "interactions.GR.rds", mode="wb")
+interactions <- readRDS("interactions.GR.rds")
+#head(interactions)
+#length(interactions) #1085167 distal targets
+```
+
+```{r}
+#load human genome
+ah <- AnnotationHub()
+ensdb <- ah[["AH95744"]] # human ensembl 104 annotation
+```
+
+### Isolate peaks of different distances from the nearest TSS
+
+Isolate the peaks that are nearer (2.5 kb - 10 kb) and those that are farer (>10 kb) from the TSS. 
+
+```{r warning=FALSE}
+#use annotateRegions function to isolate the peaks with different distances from TSS
+
+#isolate peaks hat are within 2.5 kb - 10 kb from the nearest TSS
+peaks_near <- epiwraps::annotateRegions(JUND, ensdb, proximal = c(2500,10000))
+#peaks_near$class
+#peaks_near
+levels(peaks_near$class) #peaks from "proximal >2500&<=10000bp" are relevant
+table(peaks_near$class=="proximal >2500&<=10000bp") #5909 peaks are between 2.5 and 10kb from TSS
+peaks_nearer <- peaks_near[which(peaks_near$class=="proximal >2500&<=10000bp")]
+#peaks_nearer #GRanges with 5909 ranges
+
+#isolate peaks hat are further than 10 kb from the nearest TSS
+peaks_far <- epiwraps::annotateRegions(JUND, ensdb, proximal = c(10000,1e+60))
+#peaks_far
+#peaks_far$class
+levels(peaks_far$class) #peaks from "proximal >10000&<=1e+60bp" are relevant
+table(peaks_far$class=="proximal >10000&<=1e+60bp") #10257 peaks are between >10kb frm TSS
+peaks_farer <- peaks_far[which(peaks_far$class=="proximal >10000&<=1e+60bp")]
+#peaks_farer #GRanges with 10257 ranges
+
+```
+
+5909 peaks are located within 2.5 kb - 10 kb from the TSS, while 10257 peaks are further than 10 kb from the nearest TSS. 
+
+### Characterize peaks
+
+#### Calculate proportion of peaks within 2.5 to 10 kb from the TSS whose predicted target is its nearest TSS
+
+```{r}
+# find overlaps between the nearer peaks and distal regulatory elements
+overlap_near <- findOverlaps(peaks_nearer, interactions)
+#head(overlap_near)
+#overlap_near
+length(overlap_near) #3334 overlaps between peaks and distal regulatory elements
+
+#add distal targets to new peaks object
+peaks_nd <- peaks_nearer
+peaks_nd$target <- NULL
+mcols(peaks_nd)[from(overlap_near),"target"] <- interactions[to(overlap_near)]$target
+peaks_nd <- peaks_nd[!is.na(peaks_nd$target)]
+mcols(peaks_nd)$target <- CharacterList(mcols(peaks_nd)$target)
+head(peaks_nd)
+
+#check result
+#peaks_nearer[3] #seqname: 17 ranges: 903869-904158
+#table(from(overlap_near)=="3") #the third peak should overlap with 7 targets
+#table(from(overlap_near)=="1") #the first peak should overlap with 0 targets
+#interactions[789097]$target #MYO1C
+```
+
+```{r}
+#calculate percentage of peaks whose predicted regulatory targets are also the nearest TSS
+#peaks_nd$nearestTSS.gene_name
+#peaks_nd$target
+
+#calculate how many peaks are equal and how many are not
+table(any(peaks_nd$nearestTSS.gene_name == peaks_nd$target)) #48 peaks show the same distal target as the nearest TSS
+
+#prepare new object with peaks that have distal regions
+peaks_nd_distal <- peaks_nearer[unique(from(overlap_near))]  
+#peaks_nd_distal #total 696 peaks
+
+#prepare new object with peaks that show the same TSS
+peaks_nd_distalTSS<- peaks_nd[which(any(peaks_nd$nearestTSS.gene_name == peaks_nd$target))]
+#peaks_nd_distalTSS #total 48 peaks
+
+#check specific peaks
+#which(any(peaks_nd$nearestTSS.gene_name == peaks_nd$target))
+#Example peak showing 
+#peaks_nd[39]
+
+#calculate proportion of all peaks
+prop_near <- length(peaks_nd_distalTSS)/length(peaks_nd_distal)
+#prop_near <- sum(any(peaks_nd$nearestTSS.gene_name == peaks_nd$target))/ sum(table(any(peaks_nd$nearestTSS.gene_name == peaks_nd$target))) 
+prop_near #0.069
+```
+
+
+“Of the 696 peaks that are between 2.5 and 10kb from the nearest TSS and have a predicted target, 6.9 % form an interaction with that nearest gene. 
+
+#### Calculate proportion of farer with predicted targets that equal the nearest TSS
+
+```{r}
+# find overlaps between the farer peaks and distal regulatory elements
+overlap_far <- findOverlaps(peaks_farer, interactions)
+#head(overlap_far)
+overlap_far
+length(overlap_far) #3336 overlaps between peaks and distal regulatory elements
+
+#add distal targets to peaks object
+peaks_fd <- peaks_farer
+peaks_fd$target <- NULL
+mcols(peaks_fd)[from(overlap_far),"target"] <- interactions[to(overlap_far)]$target
+peaks_fd <- peaks_fd[!is.na(peaks_fd$target)]
+mcols(peaks_fd)$target <- CharacterList(mcols(peaks_fd)$target)
+head(peaks_fd)
+
+#check result
+#peaks_farer[19] 
+#table(from(overlap_far)=="19") #the third peak should overlap with 1 target
+#table(from(overlap_far)=="1") #the first peak should overlap with 0 targets
+#interactions[802448]$target #HS3ST3A1
+```
+
+```{r}
+#calculate percentage of peaks whose predicted regulatory targets are also the nearest TSS
+#peaks_fd$nearestTSS.gene_name
+#peaks_fd$target
+
+#calculate how many peaks are equal and how many are not
+table(any(peaks_fd$nearestTSS.gene_name == peaks_fd$target)) #85 peaks show the same distal target as the nearest TSS
+
+#prepare new object with peaks that have distal regions
+peaks_fd_distal <- peaks_farer[unique(from(overlap_far))]  
+#peaks_fd_distal #total 1080 peaks
+
+#prepare new object with peaks that show the same TSS
+peaks_fd_distalTSS<- peaks_fd[which(any(peaks_fd$nearestTSS.gene_name == peaks_fd$target))]
+#peaks_fd_distalTSS #total 84 peaks
+
+#check specific peaks
+#which(any(peaks_fd$nearestTSS.gene_name == peaks_fd$target))
+#Example peak showing 
+peaks_fd[44]
+
+#calculate proportion of all peaks
+prop_far <- length(peaks_fd_distalTSS)/length(peaks_fd_distal)
+#prop_far <- sum(any(peaks_fd$nearestTSS.gene_name == peaks_fd$target))/ sum(table(any(peaks_fd$nearestTSS.gene_name == peaks_fd$target))) 
+prop_far #0.078
+```
+
+“Of the 1080 peaks that are above 10kb from the nearest TSS and have a predicted target, 7.8 % form an interaction with that nearest gene. 
+
