@@ -1,0 +1,454 @@
+---
+title: "Reul_Quantification"
+author: "Rebecca Waag"
+date: "18 6 2023"
+output: html_document
+---
+
+# Quantification of ChIP data
+
+The Reul dataset contains results from a GR and MR ChIP experiment. Perform differential analysis, to figure out which peaks are differently bound between the individual groups under stress. 
+The Reul dataset contains 3 groups of animals:
+1 - Early morning baseline
+2 - Acute stress (15 min), tissue collected after 30 min, also performed at early morning
+3 - Later afternoon baseline
+
+We will focus on comparing acute stress and early morning baseline (control), to find those regions that GR binds to under stress. 
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(sechm)
+  library(BiocParallel)
+  library(ggplot2)
+  library(chromVAR) # for motif accessibility estimation
+  library(SummarizedExperiment) # data structure
+  library(edgeR)
+  library(rtracklayer)
+  library(scales)
+})
+# to control multithreading, unix users can use:
+register(MulticoreParam(4))
+```
+
+## Perform Differential analysis on bound regions
+
+### Import SE object
+
+As the experiment was performed in rats, we are working with read counts per matrix where the coordinates were already converted to mouse coordinates. Several peaks were lost during this process.
+
+```{r}
+#load SE mouse from Reul dataset
+se_Reul <- readRDS("/mnt/bohacek/Reul_MrGr_ChIP_GSE126510/peakCounts.SE.lifted2GRCm38.rds")
+#class(se_Reul) #SE object
+#rowRanges(se_Reul) #GRanges object with 11228 ranges
+
+#use target and condition as factors
+se_Reul$target <-as.factor(se_Reul$target)
+#levels(se_Reul$target) #[1] "GR" "MR"
+se_Reul$condition<-as.factor(se_Reul$condition)
+#levels(se_Reul$condition) #[1] "Acute_stress"            "Early_morning_baseline"  "Late_afternoon_baseline"
+
+#visualize sequencing depth
+#barplot(se_Reul$depth)
+
+#add peak ranges as row names to SE object
+row.names(se_Reul) <- as.character(granges(se_Reul))
+
+#extracting the individual peaks from the se_Reul object
+#peaksR <- lapply(setNames(colnames(se_Reul), colnames(se_Reul)), FUN=function(x) rowRanges(se_Reul)[assays(se_Reul)$hasPeak[,x]])
+#length(peaksR) #contains 24 Granges
+
+#create consensus peaks
+#merged_peaksR <- reduce(unlist(GRangesList(peaksR)), with.revmap=TRUE)
+#length(merged_peaksR) #7902
+
+#remove blacklisted regions from consensus peaks
+#blacklist <- import("/reference/Mus_musculus/GRCm38.blacklist.bed")
+#merged_peaksR <- merged_peaksR[!overlapsAny(merged_peaksR, blacklist)]
+#length(merged_peaksR) #7891
+
+#only keep peaks that appear in at least 3 samples
+#merged_peaksR <- merged_peaksR[lengths(merged_peaksR$revmap)>=3]
+#length(merged_peaksR) #3658
+```
+
+### Data Exploration
+
+Explore data and visualize the differences in region counts using PCA.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 1: PCA of peak counts')}
+#plot PCA of experiment visualizing
+colors <- c("blue", "darkgreen", "red", "black")
+plotMDS(se_Reul, col=colors[se_Reul$condition], labels=se_Reul$target, gene.selection="common")
+legend("topleft", fill=colors, legend=levels(se_Reul$condition), col=colors, ncol=2)
+```
+
+There is a nice separation between GR and MR as well as between the conditions (Fig. 1). No covariates need to be used. 
+
+### Subset SE object for GR and MR
+
+```{r}
+#subset summarized experiment for GR
+#se_Reul$target
+se_Reul_GR <- se_Reul[, se_Reul$target == "GR"]
+#se_Reul_GR
+
+#specify control condition
+se_Reul_GR$condition
+se_Reul_GR$condition<-relevel(se_Reul_GR$condition, "Early_morning_baseline")
+
+#give names to regions, by default there are no rownames, use row.names
+row.names(se_Reul_GR) <- as.character(granges(se_Reul_GR))
+
+#extracting the individual GR peaks
+peaksReul_GR <- lapply(setNames(colnames(se_Reul_GR), colnames(se_Reul_GR)), FUN=function(x) rowRanges(se_Reul_GR)[assays(se_Reul_GR)$hasPeak[,x]])
+
+#create consensus peaks
+merged_peaksGR <- reduce(unlist(GRangesList(peaksReul_GR)), with.revmap=TRUE)
+length(merged_peaksGR) #4592
+
+#remove blacklisted regions from consensus peaks
+blacklist <- import("/reference/Mus_musculus/GRCm38.blacklist.bed")
+merged_peaksGR <- merged_peaksGR[!overlapsAny(merged_peaksGR, blacklist)]
+length(merged_peaksGR) #4586
+
+#subset summarized experiments for MR
+se_Reul_MR <- se_Reul[, se_Reul$target == "MR"]
+se_Reul_MR
+
+#specify control condition
+se_Reul_MR$condition
+se_Reul_MR$condition<-relevel(se_Reul_MR$condition, "Early_morning_baseline")
+
+#give names to regions, by default there are no rownames, use row.names
+row.names(se_Reul_MR) <- as.character(granges(se_Reul_MR))
+
+#extracting the individual MR peaks
+peaksReul_MR <- lapply(setNames(colnames(se_Reul_MR), colnames(se_Reul_MR)), FUN=function(x) rowRanges(se_Reul_MR)[assays(se_Reul_MR)$hasPeak[,x]])
+length(peaksReul_MR) #12 samples
+
+#create consensus peaks
+merged_peaksMR <- reduce(unlist(GRangesList(peaksReul_MR)), with.revmap=TRUE)
+length(merged_peaksMR) #6453
+
+#remove blacklisted regions from consensus peaks
+#blacklist <- import("/reference/Mus_musculus/GRCm38.blacklist.bed")
+merged_peaksMR <- merged_peaksMR[!overlapsAny(merged_peaksMR, blacklist)]
+length(merged_peaksMR) #6442
+```
+
+### Differential analysis with edgeR (GR)
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 2: Volcanoplot showing significantly bound regions by GR between control and acutely-stressed animals')}
+#prepare DGE object
+y <- DGEList(counts=assays(se_Reul_GR)$counts)
+
+#calulate normalizaiton, assumptions are met in this experiment, so we can use TMM normalization
+y <- calcNormFactors(y)
+
+#filter by expression
+#y <- y[filterByExpr(y,group=se_Reul_MR$condition),]
+
+#specify model matrix
+mm <- model.matrix(~ condition, data=as.data.frame(colData(se_Reul_GR)))
+#we use an intercept here, meaning that we compare against the control
+
+#estimate dispersion
+y <- estimateDisp(y,mm)
+y$common.dispersion #
+#plot dispersion estimates
+#plotBCV(y)
+
+#fit model
+fit <- glmQLFit(y, mm)
+
+#check coefficients
+colnames(mm)
+#[1] "(Intercept)"                      "conditionAcute_stress"            "conditionLate_afternoon_baseline"
+
+#get results
+results_GR <- list()
+
+#compare stress vs. early-morning
+results_GR[["Reul.stress"]] <- glmQLFTest(fit, coef="conditionAcute_stress")
+topTags(results_GR[["Reul.stress"]])
+summary(decideTests(results_GR[["Reul.stress"]]))
+#       conditionAcute_stress
+#Down                    1092
+#NotSig                  8161
+#Up                      1975
+
+sum(results_GR$Reul.stress$table$FDR<0.05) #3067
+
+#compare late afternoon vs. early-morning
+results_GR[["Reul.afternoon"]] <- glmQLFTest(fit, coef="conditionLate_afternoon_baseline")
+topTags(results_GR[["Reul.afternoon"]])
+summary(decideTests(results_GR[["Reul.afternoon"]]))
+#       conditionLate_afternoon_baseline
+#Down                                426
+#NotSig                             9350
+#Up                                 1452
+
+sum(results_GR$Reul.afternoon$table$FDR<0.05) #1878
+
+#calculate fdr
+for(i in names(results_GR)){
+  results_GR[[i]]$table$FDR <- p.adjust(results_GR[[i]]$table$PValue, method = "fdr")
+}
+
+#calculate which regions are overlapping between FSS and Double-hit hits
+length(Reduce(intersect, list(which(results_GR$Reul.stress$table$FDR<0.05),which(results_GR$Reul.afternoon$table$FDR<0.05)))) #1686
+
+#look at data using volcano plot to show regions with increased or decreased accessibility of acute stress
+#classify sign. up and downregulated peaks
+results_GR$Reul.stress$table$diff[results_GR$Reul.stress$table$FDR < 0.05 & results_GR$Reul.stress$table$logFC >0] <- "UP"
+results_GR$Reul.stress$table$diff[results_GR$Reul.stress$table$FDR < 0.05 & results_GR$Reul.stress$table$logFC <0] <- "DOWN"
+
+#visualize results
+ggplot(results_GR$Reul.stress$table, aes(logFC, -log10(FDR), col=results_GR$Reul.stress$table$diff)) + geom_point(size=1) + theme_bw() + scale_color_manual(values = c("blue", "red"), labels =c ("downregulated", "upregulated", "not significant")) + ggtitle('Significantly bound regions: Acute stress') + labs(color = 'DEA, FDR<0.05', x = expression("logFC"), y = expression("-log"[10]*"p-value"))
+```
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 3: Heatmap showing differentially-bound regions by GR between control and acutely-stressed animals')}
+#add metadata column to SE object to define colors
+metadata(se_Reul_GR)$anno_colors$condition <- c(Acute_stress="#BB5D5D", Early_morning_baseline= "#85A385", Late_afternoon_baseline="#CEB588")
+
+#visualize counts in heatmap
+sechm(se_Reul_GR,features = rownames(topTags(results_GR$Reul.stress, n = Inf, p.value = 0.05)), do.scale=TRUE, assayName="counts", row_title="Stress-responsive regions", gaps_at = "condition", cluster_rows = TRUE, top_annotation=c("condition"))
+
+#extract peaks from GR SE
+GRpeaks<- granges(se_Reul_GR)
+#length(MRpeaks) #11228 peaks
+
+#subset all significant GR peaks
+peaksR_GR_stress_sig <- GRpeaks[which(results_GR[["Reul.stress"]]$table$FDR<0.05)]
+#dim(results_GR[["Reul.stress"]]$table) #11228 5
+#length(peaksR_GR_stress_sig) #3067 peaks
+
+#subset sign. upregulated peaks
+peaksR_GR_stress_sigup <- GRpeaks[which((results_GR[["Reul.stress"]]$table$FDR<0.05) & (results_GR[["Reul.stress"]]$table$logFC>0))]
+#length(peaksR_GR_stress_sigup) #1975
+
+#subset sign. downregulated peaks
+peaksR_GR_stress_sigdown <- GRpeaks[which((results_GR[["Reul.stress"]]$table$FDR<0.05) & (results_GR[["Reul.stress"]]$table$logFC<0))]
+#length(peaksR_GR_stress_sigdown) #1092
+
+#save peaks
+saveRDS(merged_peaksGR, file="merged_peaksGR.rds")
+saveRDS(peaksR_GR_stress_sig, file="peaksR_GR_stress_sig.rds")
+saveRDS(peaksR_GR_stress_sigup, file="peaksR_GR_stress_sigup.rds")
+saveRDS(peaksR_GR_stress_sigdown, file="peaksR_GR_stress_sigdown.rds")
+```
+
+3067 regions show differential binding by GR upon stress exposure, of these, 1975 regions show an increase in binding (Fig. 2 & 3). Upon time of the day, 1878 regions are differentially bound by GR. 1686 of these regions overlap between the stress and afternoon condition. 
+
+## Enrichment analysis GR peaks
+
+Importantly, the detected regions from previously contains also counts of regions that were exclusively called on the MR peaks (as this was a combined se object), therefore, we first reduce our results to those peaks that are found in the individual peaks from the Reul GR dataset. This way, we will lose some of the peaks. All peaks called on the GR samples will serve as the background.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 4: Enrichment analysis of significantly more bound GR peaks')}
+#perform enrichment analysis
+library(rGREAT)
+#the background should be all accessible regions, therefore, we use the merged peaks as background
+#send data to the GREAT server to run an enrichment analysis
+#give names to regions, by default there are no rownames, use row.names
+seqlevelsStyle(merged_peaksGR) <- "UCSC"
+seqlevelsStyle(peaksR_GR_stress_sigup) <- "UCSC"
+
+#subset those GR signup peaks that have peaks called on the GR data (not also MR)
+peaksR_GR_stress_sigup <- subsetByOverlaps(peaksR_GR_stress_sigup,merged_peaksGR, type="equal") #1695
+
+#drop weird chromosome names and clean up Granges for rGREAT
+seqnames(merged_peaksGR)
+chrom <- c("chr1", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chrX", "chrY")
+merged_peaksGR_chrom<- keepSeqlevels(merged_peaksGR, value=chrom, pruning.mode="coarse")
+length(merged_peaksGR_chrom) #4580
+names(merged_peaksGR_chrom) <-NULL
+seqnames(peaksR_GR_stress_sigup)
+peaksR_GR_stress_sigup_chrom<- keepSeqlevels(peaksR_GR_stress_sigup, value=chrom, pruning.mode="coarse")
+length(peaksR_GR_stress_sigup_chrom) #1695
+names(peaksR_GR_stress_sigup_chrom) <-NULL
+
+#get enrichment results for upregulated peaks
+job_GR_up <- rGREAT::submitGreatJob(gr=peaksR_GR_stress_sigup_chrom, bg=merged_peaksGR_chrom, species="mm10") #we use mm10, cause GRCm38 is not supported
+res_GR_up <- rGREAT::getEnrichmentTables(job_GR_up)
+#res_GR_up
+
+#plot the top 20 Biological processes
+bp_GR_up <- res_GR_up$`GO Biological Process`
+#bp_GR_up
+sum(bp_GR_up$Hyper_Adjp_BH<0.05) #451 GO terms are sign. enriched
+ggplot(head(bp_GR_up,20), aes(Hyper_Fold_Enrichment, reorder(name, Hyper_Adjp_BH), size=Hyper_Foreground_Region_Hits, color=-log10(Hyper_Adjp_BH))) + geom_point() + scale_color_viridis_c() + ggtitle("Stress-responsive peaks: Biological Processes") + scale_y_discrete(labels = label_wrap(50))
+
+#save shortened peaks
+saveRDS(peaksR_GR_stress_sigup, file="peaksR_GR_stress_sigup_sh.rds")
+peaksR_GR_stress_sigdown <- subsetByOverlaps(peaksR_GR_stress_sigdown,merged_peaksGR, type="equal") #1695
+saveRDS(peaksR_GR_stress_sigdown, file="peaksR_GR_stress_sigdown_sh.rds")
+```
+
+From the enrichment analysis performed on the significantly more bound regions upon stress, no clear pattern arises, metabolic processes in general seem to be affected (Fig. 4). 
+
+## Standard differential analysis of MR peaks using edgeR
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 5: Volcanoplot showing significantly bound regions by MR between control and acutely-stressed animals')}
+#prepare DGE object
+y <- DGEList(counts=assays(se_Reul_MR)$counts)
+
+#calulate normalizaiton, assumptions are met in this experiment, so we can use TMM normalization
+y <- calcNormFactors(y)
+
+#filter by expression
+#y <- y[filterByExpr(y,group=se_Reul_MR$condition),]
+
+#specify model matrix
+mm <- model.matrix(~ condition, data=as.data.frame(colData(se_Reul_MR)))
+#we use an intercept here, meaning that we compare against the control
+
+#estimate dispersion
+y <- estimateDisp(y,mm)
+y$common.dispersion #
+#plot dispersion estimates
+#plotBCV(y)
+
+#fit model
+fit <- glmQLFit(y, mm)
+
+#check coefficients
+colnames(mm)
+#[1] "(Intercept)"                      "conditionAcute_stress"            "conditionLate_afternoon_baseline"
+
+#get results
+results_MR <- list()
+
+#compare stress vs. early-morning
+results_MR[["Reul.stress"]] <- glmQLFTest(fit, coef="conditionAcute_stress")
+topTags(results_MR[["Reul.stress"]])
+summary(decideTests(results_MR[["Reul.stress"]]))
+#       conditionAcute_stress
+#Down                     351
+#NotSig                  9586
+#Up                      1291
+
+sum(results_MR$Reul.stress$table$FDR<0.05) #1642
+
+#compare late afternoon vs. early-morning
+results_MR[["Reul.afternoon"]] <- glmQLFTest(fit, coef="conditionLate_afternoon_baseline")
+topTags(results_MR[["Reul.afternoon"]])
+summary(decideTests(results_MR[["Reul.afternoon"]]))
+#       conditionLate_afternoon_baseline
+#Down                                226
+#NotSig                             9927
+#Up                                 1075
+
+sum(results_MR$Reul.afternoon$table$FDR<0.05) #1301
+
+#calculate fdr
+for(i in names(results_MR)){
+  results_MR[[i]]$table$FDR <- p.adjust(results_MR[[i]]$table$PValue, method = "fdr")
+}
+
+#calculate which regions are overlapping between FSS and Double-hit hits
+length(Reduce(intersect, list(which(results_MR$Reul.stress$table$FDR<0.05),which(results_MR$Reul.afternoon$table$FDR<0.05)))) #987
+
+#look at data using volcano plot to show regions with increased or decreased accessibility of acute stress
+#classify sign. up and downregulated peaks
+results_MR$Reul.stress$table$diff[results_MR$Reul.stress$table$FDR < 0.05 & results_MR$Reul.stress$table$logFC >0] <- "UP"
+results_MR$Reul.stress$table$diff[results_MR$Reul.stress$table$FDR < 0.05 & results_MR$Reul.stress$table$logFC <0] <- "DOWN"
+
+#visualize results
+ggplot(results_MR$Reul.stress$table, aes(logFC, -log10(FDR), col=results_MR$Reul.stress$table$diff)) + geom_point(size=1) + theme_bw() + scale_color_manual(values = c("blue", "red"), labels =c ("downregulated", "upregulated", "not significant")) + ggtitle('Significantly bound regions: Acute stress') + labs(color = 'DEA, FDR<0.05', x = expression("logFC"), y = expression("-log"[10]*"p-value"))
+```
+
+1642 regions show differential binding by MR upon stress exposure, of these, 1291 regions show an increase in binding (Fig. 5). Upon time of the day, 1301 regions are differentially bound by MR. 987 of these regions overlap between the stress and afternoon condition.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 6: Heatmap showing differentially-bound regions by MR between control and acutely-stressed animals')}
+#add metadata column to SE object to define colors
+metadata(se_Reul_MR)$anno_colors$condition <- c(Acute_stress="#BB5D5D", Early_morning_baseline= "#85A385", Late_afternoon_baseline="#CEB588")
+
+#visualize counts in heatmap
+sechm(se_Reul_MR,features = rownames(topTags(results_GR$Reul.stress, n = Inf, p.value = 0.05)), do.scale=TRUE, assayName="counts", row_title="Stress-responsive regions", gaps_at = "condition", cluster_rows = TRUE, top_annotation=c("condition"))
+
+#extract peaks from MR SE
+MRpeaks<- granges(se_Reul_MR)
+#length(MRpeaks) #11228 peaks
+
+#subset all significant MR peaks
+peaksR_MR_stress_sig <- MRpeaks[which(results_MR[["Reul.stress"]]$table$FDR<0.05)]
+#dim(results_MR[["Reul.stress"]]$table) #11228 5
+length(peaksR_MR_stress_sig) #1642 peaks
+
+#subset sign. upregulated peaks
+peaksR_MR_stress_sigup <- MRpeaks[which((results_MR[["Reul.stress"]]$table$FDR<0.05) & (results_MR[["Reul.stress"]]$table$logFC>0))]
+length(peaksR_MR_stress_sigup) #1291
+
+#subset sign. downregulated peaks
+peaksR_MR_stress_sigdown <- MRpeaks[which((results_MR[["Reul.stress"]]$table$FDR<0.05) & (results_MR[["Reul.stress"]]$table$logFC<0))]
+length(peaksR_MR_stress_sigdown) #351
+
+#save peaks
+saveRDS(merged_peaksMR, file="merged_peaksMR.rds")
+saveRDS(peaksR_MR_stress_sig, file="peaksR_MR_stress_sig.rds")
+saveRDS(peaksR_MR_stress_sigup, file="peaksR_MR_stress_sigup.rds")
+saveRDS(peaksR_MR_stress_sigdown, file="peaksR_MR_stress_sigdown.rds")
+```
+Visualization of the differentially-bound regions indicates that the regions being bound upon stress tend to be similar to those responding to the time of the days (later-afternoon) (Fig. 6). However, this requires further analyses, which is not included here. 
+
+## Enrichment analysis MR peaks
+
+Importantly, the detected regions from previously contains also counts of regions that were exclusively called on the GR peaks (as this was a combined se object), therefore, we first reduce our results to those peaks that are found in the individual peaks from the Reul MR dataset. This way, we will lose some of the peaks. All peaks called on the MR samples will serve as the background.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 7: Enrichment analysis of significantly more bound MR peaks')}
+#perform enrichment analysis
+library(rGREAT)
+#the background should be all accessible regions, therefore, we use the merged peaks as background
+#send data to the GREAT server to run an enrichment analysis
+seqlevelsStyle(merged_peaksMR) <- "UCSC"
+seqlevelsStyle(peaksR_MR_stress_sigup) <- "UCSC"
+seqlevelsStyle(peaksR_MR_stress_sigdown) <- "UCSC"
+
+#subset those MR signup peaks that have peaks called on the GR data (not also MR)
+peaksR_MR_stress_sigup <- subsetByOverlaps(peaksR_MR_stress_sigup,merged_peaksMR, type="equal") #1157
+
+#drop weird chromosome names and clean up Granges for rGREAT
+seqnames(merged_peaksMR)
+chrom <- c("chr1", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chrX", "chrY")
+merged_peaksMR_chrom<- keepSeqlevels(merged_peaksMR, value=chrom, pruning.mode="coarse")
+length(merged_peaksMR_chrom) #6437
+names(merged_peaksMR_chrom) <-NULL
+seqnames(peaksR_MR_stress_sigup)
+peaksR_MR_stress_sigup_chrom<- keepSeqlevels(peaksR_MR_stress_sigup, value=chrom, pruning.mode="coarse")
+length(peaksR_MR_stress_sigup_chrom) #1157
+names(peaksR_MR_stress_sigup_chrom) <-NULL
+
+#get enrichment results for upregulated peaks
+job_MR_up <- rGREAT::submitGreatJob(gr=peaksR_MR_stress_sigup_chrom, bg=merged_peaksMR_chrom, species="mm10") #we use mm10, cause GRCm38 is not supported
+res_MR_up <- rGREAT::getEnrichmentTables(job_MR_up)
+#res_MR_up
+
+#plot the top 20 Biological processes
+bp_MR_up <- res_MR_up$`GO Biological Process`
+#bp_MR_up
+sum(bp_MR_up$Hyper_Adjp_BH<0.05) #146 GO terms are sign. enriched
+ggplot(head(bp_MR_up,20), aes(Hyper_Fold_Enrichment, reorder(name, Hyper_Adjp_BH), size=Hyper_Foreground_Region_Hits, color=-log10(Hyper_Adjp_BH))) + geom_point() + scale_color_viridis_c() + ggtitle("Stress-responsive peaks: Biological Processes") + scale_y_discrete(labels = label_wrap(50))
+
+saveRDS(peaksR_MR_stress_sigup, file="peaksR_MR_stress_sigup_sh.rds")
+peaksR_MR_stress_sigdown <- subsetByOverlaps(peaksR_MR_stress_sigdown,merged_peaksMR, type="equal") #107
+saveRDS(peaksR_MR_stress_sigdown, file="peaksR_MR_stress_sigdown_sh.rds")
+```
+
+From the enrichment analysis performed on the significantly more bound regions upon stress by MR, affected biological processes seem to be related to metabolism and negative regulation of transcription (Fig. 7).
+
+## Compare significantly more bound peaks between GR and MR ChIP
+
+```{r, out.width=c('100%'), fig.align='center', fig.cap=c('FIGURE 8: Upset plot showing overlaps of peaks between the significantly more bound MR and GR peaks')}
+#prepare object with sign. more bound peaks
+GR_MR<- list("MR-stress-up" = peaksR_MR_stress_sigup, "GR-stress-up" = peaksR_GR_stress_sigup)
+
+#plot Upsetplot
+regionUpset(GR_MR)
+```
+
+A large number of peaks overlaps between the MR and GR ChIP, revealing that MR and GR bind very similar regions in the genome (Fig. 8).
