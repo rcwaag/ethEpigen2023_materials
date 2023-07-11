@@ -1,0 +1,94 @@
+---
+title: "Marrocco_Load&initialQC&bw"
+author: "Rebecca Waag"
+date: "3 6 2023"
+output: html_document
+---
+
+# Load Marrocco data and perform an initial QC
+
+```{r}
+#load libraries
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rsubread)
+  library(rtracklayer)
+  library(Biostrings)
+  library(Rfastp)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ensembldb)
+  library(ggplot2)
+})
+ah <- AnnotationHub()
+```
+
+## Load Marrocco data
+
+Here, we list the bam files from the Marrocco dataset
+
+```{r}
+#Load Marrocco data
+bams<-list.files("/mnt/bohacek/Marrocco_GSE200670_stressATAC/aligned/", pattern="bam$", full=TRUE)
+names(bams) <-gsub("\\.bam","",bams)
+base <- gsub("\\.bam","",bams)
+```
+
+## Perform QCs
+
+### Fragment size distribution
+
+This code is not run as the size of the files is causing computer issues otherwise. But all samples show clear periodicity and therefore sufficient quality. 
+
+```{r eval=FALSE, include=TRUE}
+bp <- BiocParallel::MulticoreParam(4)
+fragSizesDist(bams, what=10000, BPPARAM=bp)
+```
+
+## Generate coverage tracks from bam files
+
+```{r eval=FALSE, include=TRUE}
+#bam files are already loaded, use bam2bw to convert to bigwig files
+for(f in names(bams)){
+  bam2bw(bams[[f]], paste0("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/tracks/",f,".bw"), paired=TRUE)
+}
+```
+
+## Generate coverage tracks from bam files, restricted to nucleosome-free regions
+
+As we will also focus on transcription factor activity later on, tracks from NF-bams are created. 
+
+```{r eval=FALSE, include=TRUE}
+#read in NF bam files
+NFbams<-list.files("/mnt/bohacek/Marrocco_GSE200670_stressATAC/NFbam/", pattern="bam$", full=TRUE)
+names(NFbams) <-gsub("\\.bam","",NFbams)
+base <- gsub("\\.bam","",NFbams)
+
+#convert alignment bam files into coverage tracks
+for(f in names(NFbams)){
+  bam2bw(NFbams[[f]], paste0("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/NFtracks/",f,".bw"), paired=TRUE)
+}
+```
+
+## TSS enrichment score
+
+Quality metric for signal-to-noise ration in ATAC-Seq data. Values >8 are considered ideal, values <5 are concerning.
+
+```{r, out.width='75%', fig.align='center', fig.cap='FIGURE 1: TSS enrichment score'}
+#list files
+tracks <- list.files("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/tracks/", pattern="bw$", full=TRUE)
+#adjust file names
+names(tracks) <- gsub("\\.bw","",basename(tracks))
+
+#load ensemble object
+ensdb_mm <- ah[["AH89211"]] #GRCm38
+
+#calculate enrichment score
+en <- TSSenrichment(tracks, ensdb_mm, useSeqLevels = NULL)
+en$score
+
+#plot enrichment scores
+ggplot(en$data, aes(position, enrichment, colour=sample)) + geom_line() + scale_y_sqrt()
+```
+
+Not all TSS score are above 8, but none are below 5, therefore, the quality is considered sufficient to continue the analysis. Some TSS scores are surprisingly high (>200) (Fig. 1) which will be further evaluated, but is not included in this analysis. 
