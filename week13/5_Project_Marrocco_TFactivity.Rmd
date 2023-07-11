@@ -1,0 +1,188 @@
+---
+title: "Marrocco_TFactivity"
+author: "Rebecca Waag"
+date: "1 7 2023"
+output: html_document
+---
+
+## Motif accessibility test
+
+We perform a motif accessibility test to estimate differential TF activity between the conditions. 
+
+```{r}
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(epiwraps)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(sechm)
+  library(BiocParallel)
+  library(ggplot2)
+  library(chromVAR) # for motif accessibility estimation
+  library(SummarizedExperiment) # data structure
+  library(limma) # for statistical analysis
+  library(rtracklayer)
+})
+```
+
+### Load SE object with NF counts
+
+```{r}
+#load SE object
+se_NF <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/MarroccopeaksNF.SE.rds")
+```
+
+### Load genomic sequence
+
+```{r}
+#load genome sequence GRCm38
+ah <- AnnotationHub(localHub = TRUE)
+mm38 <- ah[["AH68356"]]
+#class(mm38) #2.bit format, does not work with chormVar:addGCBias
+
+#export as fasta format
+#Biostrings::writeXStringSet(rtracklayer::import(mm38), "mm38.fa")
+
+#load mm38 fasta file
+genome_mm38 <- Rsamtools::FaFile("mm38.fa")
+class(genome_mm38) #FaFile
+```
+
+### Add GC bias to the object
+
+```{r}
+#add GC bias to the object
+se_NF<-chromVAR::addGCBias(se_NF, genome=genome_mm38)
+#rowRanges(se_NF) #bias column added
+```
+
+### Get database of motifs
+
+```{r}
+#get database of motifs
+#source("/common/scripts/getNonRedundantMotifs.R")
+#motifs <- getNonRedundantMotifs(format="PWMatrix", species = "Mmusculus") #doesn't work
+
+#test which databases exist for Mus musculus
+motifs <- query(MotifDb, c("Mmusculus")) #outputs default output
+#motifs #1427 entries in total from 8 sources
+
+#obtain HOCOMOCOv10 database of motifs
+motifs <- query(MotifDb, c("HOCOMOCOv10", "Mmusculus")) #outputs default output
+#motifs #contains 426 entries
+
+#convert motif into PWMatrix format
+motifs <- do.call(TFBSTools::PWMatrixList, setNames(
+           universalmotif::convert_motifs(motifs, class="TFBSTools-PWMatrix"),
+           mcols(motifs)$geneSymbol)) #only keep geneSymbol as name
+head(motifs) #correctly named, 426 entries
+```
+
+### Get occurrence of each motif in each peak
+
+```{r}
+#find which peaks contain which motifs
+moi<-motifmatchr::matchMotifs(motifs, subject=se_NF, genome=genome_mm38)
+moi #output is a matrix instead of GRanges
+#length(motifs)
+#head(assay(moi))
+#as.matrix(head(assay(moi)))
+```
+
+
+### Calculate aggregated motif score per sample
+
+```{r}
+#create aggregated motif score per sample
+dev_stress <-chromVAR::computeDeviations(object=se_NF, 
+                                 annotations=moi, 
+                                 background_peaks=getBackgroundPeaks(se_NF, niterations=1000))
+
+#dev_stress #contains genenames as rownames and 2 assays (deviations and z-scores)
+
+#variability<-computeVariability(dev_stress) #gives error due to duplicate row.names
+#plotVariability(variability)
+```
+
+### Normalization
+
+```{r}
+#head(assays(dev_stress)$z)
+#add new assay for normalization
+assays(dev_stress)$norm<-scale(assays(dev_stress)$z)
+#dev_stress #new norm assay added
+```
+
+### Differential motif accessibility analysis testing for stress effect
+
+As similar model as previously will be used to test for the effect of acute stress, correcting for history of stress, sex and surrogate variable. 
+
+```{r}
+#remove rows without entry
+dev_stress <- dev_stress[rowSums(is.na(assay(dev_stress)))==0,]
+
+#add one surrogate variable
+dev_stress <- SEtools::svacor(dev_stress, ~sex + history + stress, n.sv=1, assayName = "norm", useVST = FALSE)
+
+#specify a linear model
+mm_group <- model.matrix(~ SV1 + sex + history + stress, data=as.data.frame(colData(dev_stress)))
+colnames(mm_group)
+#[1] "(Intercept)"    "SV1"            "sexfemale"      "historyhistory" "stressacute"   
+
+#fit the model
+fit_group <- lmFit(assays(dev_stress)$norm, mm_group)
+
+#calculate the t-statistics
+fit_group <- eBayes(fit_group)
+
+#summarize results
+res_group <- as.data.frame(topTable(fit_group, coef="stressacute", number=Inf))
+head(res_group)
+
+#manually remove duplicates
+res_group <- res_group[!duplicated(res_group$ID),]
+row.names(res_group) <- res_group$ID
+
+#subset sign. altered TFs into new object
+res_group_DE<-subset(res_group, res_group$adj.P.Val<0.05)
+nrow(res_group_DE) # activity of 9 TFs is significantly different
+
+#save TF name from ID as separate TF column
+res_group$TF<-res_group$ID
+head(res_group$TF)
+```
+
+### Visualize sign. hits in volcano plot
+
+```{r, out.width=c('75%'), fig.align='center', fig.cap=c('FIGURE 1: Volcanoplot showing the estimated TF activity')}
+#visualize estimated differentially active TFs
+ggplot(res_group, aes(logFC, -log10(adj.P.Val), label=TF))+geom_text()
+```
+
+The TFs are shown in the volcanoplot, with ANDR, GCR and PRGR being among the top hits (Fig. 1)
+
+### Plot heatmap of estaimated altered TF activity
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 2: Heatmap showing signifcantly altered TFs')}
+#add metadata column to SE object to define colors
+metadata(dev_stress)$anno_colors$stress <- c(no="#A8BED0", acute="#2F4E67")
+metadata(dev_stress)$anno_colors$history <- c(no="#F7D9A3", history="#DB9413")
+metadata(dev_stress)$anno_colors$sex <- c(male="#A87974", female="#E4A6A0")
+
+#plot heatmap
+sechm(dev_stress, features=head(row.names(res_group),9), assayName="corrected", top_annotation = c("sex", "history", "stress"), row_title="TFs with estimated differential activity")
+#sechm(dev_stress, features=head(row.names(res_group),6), assayName="corrected", top_annotation = c("sex", "stress", "history", "depth"))
+dev_stress
+```
+
+TFs with estimated altered activity are shown (Fig. 2)
+
+### Save object
+
+```{r}
+#save dev_stress object
+saveRDS(dev_stress, file="Marrocco_TFactivity.rds")
+```
+
+Differential motif accessibility analysis modeling the effect of stress (correcting for sex, history and SV1) reveals 9 TFs with estimated differential activity based on the accessibility. Strikingly, the glucocorticoid receptor (GR/GCR) is among the top hits. 
