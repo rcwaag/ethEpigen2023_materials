@@ -1,0 +1,143 @@
+---
+title: "Marrocco_PeakCalling&SE"
+author: "Rebecca Waag"
+date: "5 6 2023"
+output: html_document
+---
+# Peak calling and peak exploration
+
+Peaks were called on individual bam files instead of merged reads, to have access to all individual peaks in all samples as well.
+
+```{r}
+#load libraries
+suppressPackageStartupMessages({
+  library(AnnotationHub)
+  library(Rsubread)
+  library(rtracklayer)
+  library(Biostrings)
+  library(Rfastp)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(ensembldb)
+})
+ah <- AnnotationHub()
+```
+
+## Peak calling using MACS2
+
+Peak calling using MACS2 was performed using a bash script directly in Unix to call peaks on the original BAM files. 
+
+```{bash eval=FALSE, engine.opts='-l', include=TRUE}
+#!/bin/bash
+
+#mkdir -p data_Marrocco/peaks
+
+#cd /mnt/bohacek/Marrocco_GSE200670_stressATAC/aligned/
+
+# Loop through BAM files in the directory
+#for bam_file in *.bam
+#do
+## Get the basename of the BAM file
+#bam_basename=$(basename -- "$bam_file")
+#bam_basename="${bam_basename%.*}"
+#echo $bam_basename
+        
+# Perform peakcalling with MACS
+#macs2 callpeak -t "$bam_file" -f BAMPE -n "$bam_basename" -g mm --outdir /mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/peaks
+#echo $bam_basename peak calling done
+#done
+
+```
+
+Peak calling using MACS2 was performed using a bash script directly in Unix to call peaks on the NF-BAM files, as we are most interested in transcription factor mediated effect.
+
+```{bash eval=FALSE, engine.opts='-l', include=TRUE}
+#!/bin/bash
+
+#mkdir -p data_Marrocco/NF-peaks
+
+#cd /mnt/bohacek/Marrocco_GSE200670_stressATAC/NFbam/
+
+# Loop through BAM files in the directory
+#for bam_file in *.bam
+#do
+# Get the basename of the BAM file
+#bam_basename=$(basename -- "$bam_file")
+#bam_basename="${bam_basename%.*}"
+#echo $bam_basename
+        
+# Perform peakcalling with MACS
+#macs2 callpeak -t "$bam_file" -f BAMPE -n "$bam_basename" -g mm --outdir /mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/NF-peaks
+#echo $bam_basename peak calling done
+#done
+
+```
+
+## Import peaks
+
+```{r}
+#obtain peak names
+peaksM <- list.files("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/peaks/", pattern = "narrowPeak", full = TRUE)
+#peaksM
+
+#rename peaks
+names(peaksM) <- gsub("\\.narrowPeak","",basename(peaksM))
+
+#import peaks
+peaksM <- lapply(peaksM, FUN=rtracklayer::import)
+length(peaksM) #24 peak files
+
+#how many peaks were called in each file?
+for (i in 1:length(peaksM)){
+  print(names(peaksM[i]))
+  print(length(peaksM[[i]]))
+}
+
+#have a look at the first peaks
+head(peaksM, 1)
+```
+
+## Import NF-peaks
+
+```{r}
+#obtain peak names
+NF_peaks <- list.files("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/NF-peaks/", "narrowPeak",full=TRUE)
+#peaks
+
+#rename peaks
+names(NF_peaks) <- gsub("\\.narrowPeak","",basename(NF_peaks))
+
+#import peaks
+NF_peaks <- lapply(NF_peaks, FUN=rtracklayer::import)
+length(NF_peaks) #25 peak files; also contains merged peaks
+
+#how many peaks were called in each file?
+for (i in 1:length(NF_peaks)){
+  print(names(NF_peaks[i]))
+  print(length(NF_peaks[[i]]))
+}
+
+#have a look at the first peaks
+head(NF_peaks,1)
+```
+
+## Visualize example peaks
+
+Visualization of an example peak (Fig. 1) from one of the ARS females. 
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 1: Example peak called on the Marrocco bam files')}
+#select peak of interest and plot coverage of bam file in that region
+#define sample
+example_peaks <- peaksM[[1]]
+head(example_peaks)
+
+#define peak of interest
+region <- as.character(granges(example_peaks[69595]))
+
+#visualize a nice peak with the surrounding
+#setwd("/mnt/bohacek/Marrocco_GSE200670_stressATAC/aligned")
+plotSignalTracks(files=list(ATAC="/mnt/bohacek/Marrocco_GSE200670_stressATAC/aligned/ARS_female_GSM6041847.bam", peaks=example_peaks),
+                 region=region, 
+                 extend=2000)
+```
+
