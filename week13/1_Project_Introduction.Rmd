@@ -1,0 +1,44 @@
+---
+title: "Project_Introduction"
+author: "Rebecca Waag"
+date: "10 7 2023"
+output: html_document
+---
+
+# Introduction
+
+Every organism is in constant need to maintain homeostasis in an ever-changing environment. Acute stress, conceived as a threat to this fine-tuned balance, triggers a prompt response in the organism, to reestablish this balance, a process referred to as allostasis. In the ventral hippocampus, a brain region particularly sensitive to stress (Bannerman et al., 2004), acute stress triggers a tightly regulated wave of molecular changes (Floriou-Servou et al., 2021; von Ziegler et al., 2022). 
+On the level of transcription, gene expression peaks at 45 and 90 min, and returns to baseline within 4 hours. 
+However, less is known about the changes in the chromatin landscape being responsible for altered transcription. 
+Assay for Transposase-Accessible Chromatin using sequencing (ATAC-Seq), a technique to assess genome-wide chromatin accessibility (Buenrostro et al., 2015), was applied in a recent study to investigate how a prior stress exposure alters the stress response (Caradonna et al., 2022). While a group of genes, affected by history of stress, was oberved, the acute stress condition was analyzed to a lesser extent.
+
+Stress-induced alterations in transcription can partially also be traced back to individual signaling molecules which are released upon stress exposure, such as norepinephrine (Privitera et al.). However, on a longer timescale, also glucocorticoids are released (Droste et al., 2008) . These can bind to glucocorticoid receptors (GR) and mineralocorticoid receptors (MR)(A M Koning et al., 2019). Upon binding, the receptor can translocate into the nucleus and exert its action as a transcription factor, thus directly affecting gene transcription (Meijer et al., 2018).
+
+Here, we aim to identify chromatin regions that show altered accessibility in response to acute stress using a published dataset (Caradonna et al., 2022). Furthermore, we use a published data from ChIP-Seq (Park, 2009), a technique to detect transcription factor binding sites, on GR and MR (Mifsud et al., 2021) to characterize the significantly altered accessible chromatin regions regarding their binding capacity for GR or MR.
+
+
+
+# References
+
+A M Koning, A.-S.C., Buurstede, J.C., C M van Weert, L.T., and Meijer, O.C. (2019). Glucocorticoid and Mineralocorticoid Receptors in the Brain: A Transcriptional Perspective.
+
+Bannerman, D.M., Rawlins, J.N.P., McHugh, S.B., Deacon, R.M.J., Yee, B.K., Bast, T., Zhang, W.N., Pothuizen, H.H.J., and Feldon, J. (2004). Regional dissociations within the hippocampus—memory and anxiety. Neurosci. Biobehav. Rev. 28, 273–283.
+
+Buenrostro, J.D., Wu, B., Chang, H.Y., and Greenleaf, W.J. (2015). ATAC-seq: A Method for Assaying Chromatin Accessibility Genome-Wide. Curr. Protoc. Mol. Biol. 109, 21.29.1-21.29.9.
+
+Caradonna, S.G., Paul, M.R., and Marrocco, J. (2022). An allostatic epigenetic memory on chromatin footprints after double-hit acute stress. Neurobiol. Stress 20, 100475.
+
+Droste, S.K., De Groote, L., Atkinson, H.C., Lightman, S.L., Reul, J.M.H.M., and Linthorst, A.C.E. (2008). Corticosterone Levels in the Brain Show a Distinct Ultradian Rhythm but a Delayed Response to Forced Swim Stress. Endocrinology 149, 3244–3253.
+
+Floriou-Servou, A., von Ziegler, L., Waag, R., Schläppi, C., Germain, P.-L., and Bohacek, J. (2021). The Acute Stress Response in the Multiomic Era. Biol. Psychiatry.
+
+Meijer, O.C., Buurstede, J.C., and Schaaf, M.J.M. (2018). Corticosteroid Receptors in the Brain: Transcriptional Mechanisms for Specificity and Context-Dependent Effects. Cell. Mol. Neurobiol. 2018 394 39, 539–549.
+
+Mifsud, K.R., Kennedy, C.L.M., Salatino, S., Sharma, E., Price, E.M., Haque, S.N., Gialeli, A., Goss, H.M., Panchenko, P.E., Broxholme, J., et al. (2021). Distinct regulation of hippocampal neuroplasticity and ciliary genes by corticosteroid receptors. Nat. Commun. 12.
+
+Park, P.J. (2009). ChIP–seq: advantages and challenges of a maturing technology. Nat. Rev. Genet. 2009 1010 10, 669–680.
+
+Privitera, M., Von Ziegler, L.M., Floriou-Servou, A., Duss, S.N., Zhang, R., Leimbacher, S., Sturman, O., Waag, R., Roessler, F.K., Heylen, A., et al. Noradrenaline release from the locus coeruleus shapes stress-induced hippocampal gene expression. BioRxiv.
+
+von Ziegler, L.M., Floriou-Servou, A., Waag, R., Das Gupta, R.R., Sturman, O., Gapp, K., Maat, C.A., Kockmann, T., Lin, H.Y., Duss, S.N., et al. (2022). Multiomic profiling of the acute stress response in the mouse hippocampus. Nat. Commun. 2022 131 13, 1–20.
+
