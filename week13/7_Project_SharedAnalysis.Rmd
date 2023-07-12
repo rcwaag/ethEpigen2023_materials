@@ -1,0 +1,444 @@
+---
+title: "Project_CombinedAnalysis"
+author: "Rebecca Waag"
+date: "18 6 2023"
+output: html_document
+---
+
+# Combining stress-induced changes in accessibility and transcription factor binding
+
+Here, we have a closer look at the stress-responsive peaks from the ATAC and ChIP dataset. 
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(motifmatchr)
+  library(MotifDb)
+  library(universalmotif)
+  library(Biostrings)
+  library(TFBSTools)
+  library(PWMEnrich)
+  library(sechm)
+  library(BiocParallel)
+  library(memes) #for meme-based methods
+  library(ggplot2)
+  library(chromVAR) # for motif accessibility estimation
+  library(rtracklayer)
+  library(AnnotationHub)
+  library(rGREAT)
+  library(GenomicRanges)
+})
+# to control multithreading, unix users can use:
+register(MulticoreParam(4))
+ah <- AnnotationHub()
+```
+
+## Find overlap between stress ATAC peaks and ChIP peaks
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 1: Upsetplot showing how many of the sign. ATAC peaks overlap with the sign. GR ChIP peaks')}
+#ATAC peaks from NF that are stress responsive and downregulated
+ATAC_sigdown <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksM_NF_stress_sigdown.rds")
+ATAC_sigdown #43 ranges
+seqlevelsStyle(ATAC_sigdown) <- "NCBI"
+
+#ATAC peaks from NF that are stress responsive and upregulated
+ATAC_sigup <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksM_NF_stress_sigup.rds")
+ATAC_sigup #868 ranges
+seqlevelsStyle(ATAC_sigup) <- "NCBI"
+
+#GR peaks from that are stress responsive and upregulated
+GR_sigup <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksR_GR_stress_sigup_sh.rds")
+GR_sigup #1695 ranges
+seqlevelsStyle(GR_sigup) <- "NCBI"
+
+#GR peaks from that are stress responsive and downregulated
+GR_sigdown <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksR_GR_stress_sigdown_sh.rds")
+GR_sigdown #342 ranges
+seqlevelsStyle(GR_sigdown) <- "NCBI"
+
+#combine peaks into one object
+ATAC_GR<- list("GR-stress-up" = GR_sigup, "GR-stress-down" = GR_sigdown, "ATAC-stress-up" = ATAC_sigup, "ATAC-stress-down" = ATAC_sigdown)
+
+#plot overlap of regions
+#regionUpset(ATAC_GR)
+regionUpset(ATAC_GR, reference = ATAC_GR$`ATAC-stress-up`)
+
+#Calculate the proportion of upregulated ATAC peaks that can be explained by GR binding
+ATACandGR <- ATAC_sigup[overlapsAny(ATAC_sigup, GR_sigup)]
+prop <- length(ATACandGR)/length(ATAC_sigup)
+prop #0.2407834
+```
+
+209 of the 868 sign. more accessible ATAC peaks overlap with significantly more peaks bound by GR as detected by GR ChIP (Fig. 1). This accounts for 24% of the sign. more accessible ATAC peaks. 
+
+As GR and MR binding occurs at overlapping loci, we next included MR in the analysis.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 2: Upsetplot showing how many of the sign. ATAC peaks overlap with the sign. more bound GR and MR ChIP peaks')}
+#MR peaks from that are stress responsive and upregulated
+MR_sigup <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksR_MR_stress_sigup_sh.rds")
+MR_sigup #1157 ranges
+seqlevelsStyle(MR_sigup) <- "NCBI"
+
+#MR peaks from that are stress responsive and upregulated
+MR_sigdown <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/peaksR_MR_stress_sigdown_sh.rds")
+MR_sigdown #107 ranges
+seqlevelsStyle(MR_sigdown) <- "NCBI"
+
+#we focus on regions with increased accessibility upon stress
+ATAC_GR_MR_up<- list("GR-stress-up" = GR_sigup, "ATAC-stress-up" = ATAC_sigup, "MR-stress-up" = MR_sigup)
+
+#plot overlap
+regionUpset(ATAC_GR_MR_up, reference = ATAC_GR_MR_up$`ATAC-stress-up`)
+```
+
+Visualizing the overlaps in an Upset plot reveals that 130 of the ATAC peaks overlap with both GR and MR. While 79 peaks exclusively overlap with GR, only 8 exclusively overlap with MR (Fig. 2). 651 ATAC peaks show no overlap with either GR or MR. 
+
+# Visualize signal using tracks
+
+```{r}
+tracks <- list.files("/mnt/bohacek/rebecca/training/EpiC/Project/data_Marrocco/NFtracks/", pattern="bw$", full=TRUE)
+names(tracks) <- gsub("\\.bw","",basename(tracks))
+#names(tracks)<- c(rep("no acute", 12), rep("acute", 12))
+tracks <- tracks[1:24]
+length(tracks) # 24 files
+```
+
+## Accessibility peaks that do also bind GR
+
+Only the control and FSS group will be used to plot the coverage. 
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 3: Enriched Hatmap showing the read coverage around the sign. more accessible peaks upon stress bound by GR')}
+#subset peaks that that show both increased accessibility and increased GR binding upon stress
+ATACandGR <- ATAC_sigup[overlapsAny(ATAC_sigup, GR_sigup)] #209 ranges
+
+#read signal around overlapping peaks
+sm2 <- signal2Matrix(tracks, ATACandGR, w=5, extend=2000)
+
+#combine all control and all FSS samples
+smm2 <- list(Control=mergeSignalMatrices(sm2[grep("Control",names(sm2))]),
+            FSS=mergeSignalMatrices(sm2[grep("FSS",names(sm2))]))
+
+#plot signal
+plotEnrichedHeatmaps(smm2, trim=0.95, colors = c("white","darkred"))
+```
+
+A clear difference is visible between the coverage, showing a higher signal in the FSS group (Fig. 3). 
+
+We perform clustering to test, whether different coverage tracks show different patterns. 
+
+```{r}
+#look whether there are any clusters emerging between those peaks
+#check for number of clusters that define a certain variability
+#cl <- clusterSignalMatrices(smm2, k=2:10)
+#ggplot(cl$varExplained, aes(k, varExplained)) + geom_line()
+```
+
+3 clusters are used to cluster the signal based on the explained variance per added clsuter.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 4: Enriched Hatmap showing the read coverage around the sign. more accessible peaks upon stress bound by GR for the individual clusters')}
+#cluster signal
+#set seed to ensure reproducibility of clustering
+set.seed(123)
+#clustering signal with kmeans into 3 clusters, the relative signal instead of absolute values is used
+cl <- epiwraps::clusterSignalMatrices(smm2, k=3, scaleRows = TRUE, seed=TRUE) #3 clusters explain 76% of variance
+#use scaleRows=RUE?
+
+#add cluster information to the GRanges object
+ATACandGR$clusters <- cl
+#regions
+#compare number of regions in each cluster
+table(cl)
+
+#define colors for clusters
+mycolors <-c("1"="slateblue3", "2"="sienna3", "3"="plum3", "4"="red", "5"="blue")
+#plot heatmap with clusters
+plotEnrichedHeatmaps(smm2, row_split=cl, mean_color = mycolors, colors=c("white", "darkred"), scale_row="global")
+```
+
+By plotting the tracks split into clusters, no clear differences between the signals emerge (Fig. 4), therefore, the clusters are plotted individually for the two groups. 
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 5: Read coverage between control and FSS samples for each cluster')}
+#overlay for one cluster all of the marks
+d<-meltSignals(smm2, splitBy=cl)
+head(d)
+ggplot(d, aes(position, mean, colour=sample))+geom_line() +facet_wrap(~split)
+```
+
+Looking at the individual clusters, the pattern seems very similar in all of them, with certain differences in the overall baseline coverage (Fig. 5). The center position shows an enhanced signal for all clusters in the FSS group.
+
+# Accessibility peaks that do not also bind GR or MR
+
+we also plot the signal for those accessibility peaks that cannot be explained by GR or MR.
+
+```{r}
+#extract those peaks that cannot be explained by GR and MR action
+ATAC_noex <- ATAC_sigup[!overlapsAny(ATAC_sigup, GR_sigup)]
+ATAC_noex <- ATAC_noex[!overlapsAny(ATAC_noex, MR_sigup)]
+ATAC_noex #651 ranges
+```
+
+## Perform enrichment analysis
+
+```{r}
+#perform enrichment analysis using rGREAT server
+library(rGREAT)
+
+#adjust seqlevelStyle for rGREAT server
+seqlevelsStyle(ATAC_noex) <- "UCSC"
+ATAC_peaks <- readRDS("/mnt/bohacek/rebecca/training/EpiC/Project/merged_peaksM_NF.rds")
+seqlevelsStyle(ATAC_peaks) <- "UCSC"
+
+chrom <- c("chr1", "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chrM", "chrX", "chrY")
+ATAC_peaks_chrom<- keepSeqlevels(ATAC_peaks, value=chrom, pruning.mode="coarse")
+seqnames(ATAC_peaks_chrom)
+names(ATAC_peaks_chrom) <-NULL
+
+#get enrichment results for all sign peaks
+job_stress_sig <- rGREAT::submitGreatJob(gr=ATAC_noex, bg=ATAC_peaks_chrom, species="mm10") #we use mm10, cause GRCm38 is not supported
+res_stress_sig <- rGREAT::getEnrichmentTables(job_stress_sig)
+#res_stress_sig
+
+#plot the top 20 Biological processes
+bp_stress_sig <- res_stress_sig$`GO Biological Process`
+#bp_stress_sig
+sum(bp_stress_sig$Hyper_Adjp_BH<0.05) #0 GO terms are sign. enriched
+```
+
+The enrichment analysis on the stress-induced more accessible peaks that do not overlap with a GR or MR signal yields no significant results. For comparability, the same background (all peaks called by the Marrocco experiment) was used. This might also partially be due to the warning "The default enrichment tables contain no associated genes for the input regions". 
+
+## Motif enrichment analysis
+
+Next, we perform motif enrichment analysis, to see which motifs are enriched in these peaks
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 6: Motif enrichment analysis for peaks that are more accessible but not bound by GR or MR upon stress')}
+#obtain genome sequence:
+genome <- ah[["AH68356"]]
+seqlevelsStyle(ATAC_noex) <- "NCBI"
+
+# we get the sequences corresponding to the peak centers:
+peak_seqs <- memes::get_sequence(ATAC_noex, genome)
+# peak_seqs <- Biostrings::getSeq(genome, peak_centers)
+names(peak_seqs) <- as.character(granges(ATAC_noex))
+peak_seqs
+
+#query motifs from a single source
+motifs <- MotifDb::query(MotifDb, c("Mmusculus", "HOCOMOCOv10"))
+#seqlevelsStyle(ATAC_noex) <- "ensembl"
+
+#identify motifs that are enriched in input sequences
+ame <- memes::runAme(peak_seqs, database=convert_motifs(motifs), meme_path="/common/meme/bin/")
+head(ame)
+
+#plot results
+ggplot(ame, aes(log2((1+tp)/(1+fp)), -log10(adj.pvalue), size=tp_percent)) + 
+  geom_point(alpha=0.3) + geom_text(aes(label=motif_id), data=head(ame)) +
+  labs(x="log2(fold-enrichment)", size="% of set")
+```
+
+Despite the peaks not being bound by GR or MR, there is still a strong enrichment of GCR and similar motifs in the ATAC peaks (Fig. 6).
+
+We next compare this with the motif enrichment of those peaks that are actually bound by GR. 
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 7: Motif enrichment analysis for peaks that are more accessible and bound by GR upon stress')}
+#obtain genome sequence:
+ah <- AnnotationHub(localHub=TRUE)
+genome <- ah[["AH68356"]]
+seqlevelsStyle(ATACandGR) <- "NCBI"
+
+# we get the sequences corresponding to the peak centers:
+peak_seqs <- memes::get_sequence(ATACandGR, genome)
+# peak_seqs <- Biostrings::getSeq(genome, peak_centers)
+names(peak_seqs) <- as.character(granges(ATACandGR))
+peak_seqs
+
+#query motifs from a single source
+motifs <- MotifDb::query(MotifDb, c("Mmusculus", "HOCOMOCOv10"))
+#seqlevelsStyle(ATAC_noex) <- "ensembl"
+
+#identify motifs that are enriched in input sequences
+ame <- memes::runAme(peak_seqs, database=convert_motifs(motifs), meme_path="/common/meme/bin/")
+head(ame)
+
+#plot results
+ggplot(ame, aes(log2((1+tp)/(1+fp)), -log10(adj.pvalue), size=tp_percent)) + 
+  geom_point(alpha=0.3) + geom_text(aes(label=motif_id), data=head(ame)) +
+  labs(x="log2(fold-enrichment)", size="% of set")
+```
+
+Surprisingly, both subsets of peaks show a very similar enrichment of GCR motifs (Fig. 6 & 7), therefore, motif enrichment gives no furthr indication of why some peaks are bound by GR and some aren't. 
+
+## Visualize signal around non-GR/MR peaks
+
+Again, only control and FSS coverage are used to visualize the signal for the regions of accessible peaks without GR/MR signal.  
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 8: Enriched Hatmap showing the read coverage around the sign. more accessible peaks upon stress not bound by GR or MR')}
+seqlevelsStyle(ATAC_noex) <- "ensembl"
+
+#read signal around non-overlapping peaks
+sm2 <- signal2Matrix(tracks, ATAC_noex, w=5, extend=2000)
+
+#combine all control and all FSS samples
+smm2 <- list(Control=mergeSignalMatrices(sm2[grep("Control",names(sm2))]),
+            FSS=mergeSignalMatrices(sm2[grep("FSS",names(sm2))]))
+
+#plot signal
+plotEnrichedHeatmaps(smm2, trim=0.95, colors = c("white","darkred"))
+```
+
+A clear difference is visible between the strength of the coverage signal between control and FSS, showing a higher signal in the FSS group (Fig. 8). 
+
+We perform clustering to test, whether different coverage tracks show different patterns. 
+
+```{r}
+#look whether there are any clusters emerging between those peaks
+#check for number of clusters that define a certain variability
+#cl <- clusterSignalMatrices(smm2, k=2:10)
+#ggplot(cl$varExplained, aes(k, varExplained)) + geom_line()
+```
+
+4 clusters seem to explain around 80-90% of variability in the signal. Afterwards, the increase in explained variance strongly decreases. Therefore, 4 clusters will be used. 
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 9: Enriched Hatmap showing the read coverage around the sign. more accessible peaks upon stress not bound by GR or MR for the individual clusters')}
+#cluster signal
+#set seed to ensure reproducibility of clustering
+set.seed(123)
+#clustering signal with kmeans into 4 clusters, the relative signal instead of absolute values is used
+cl <- epiwraps::clusterSignalMatrices(smm2, k=4, scaleRows = TRUE, seed=TRUE) #4 clusters explain 75% of variance
+#use scaleRows=RUE?
+
+#add cluster information to the GRanges object
+ATAC_noex$clusters <- cl
+#regions
+#compare number of regions in each cluster
+table(cl)
+
+#define colors for clusters
+mycolors <-c("1"="slateblue3", "2"="sienna3", "3"="plum3", "4"="red", "5"="blue")
+#plot heatmap with clusters
+plotEnrichedHeatmaps(smm2, row_split=cl, mean_color = mycolors, colors=c("white", "darkred"), scale_row="global")
+```
+
+By plotting the tracks split into clusters, no clear differences between the signals emerge, therefore, the clusters are plotted individually for the two groups (Fig. 9). 
+
+```{r, out.width=c('50%'), fig.align='center', fig.cap=c('FIGURE 10: Read coverage between control and FSS samples for each cluster')}
+#overlay for one cluster all of the marks
+d<-meltSignals(smm2, splitBy=cl)
+head(d)
+ggplot(d, aes(position, mean, colour=sample))+geom_line() +facet_wrap(~split)
+```
+
+Looking at the individual clusters, the pattern seems very similar in all of them, with the peak center showing an enhanced signal in the center in the FSS group compared to the control group (Fig. 10). No clear differences in the signal between the different clusters emerge. 
+
+# Motif scanning
+
+Next, we test whether the motif occurence (GCR) differs between those peaks with and without a GR signal. For this, motif scanning will be performed using the GCR motif (Fig. 11). A peak_center of 140 bp will be used
+
+```{r, out.width=c('50%'), fig.align='center', fig.cap=c('FIGURE 11: GCR motif')}
+#obtain GR motif
+motif <- MotifDb::query(MotifDb, c("GCR","Mus"))[[1]]
+#plot motif
+view_motifs(motif)
+
+#convert motif format
+motif2 <- convert_motifs(motif, class="TFBSTools-PFMatrix")
+genome <- Rsamtools::FaFile("/reference/Mus_musculus/Ensembl/GRCm38/Sequence/WholeGenomeFasta/Mus_musculus.GRCm38.dna_sm.primary_assembly.fa")
+```
+
+## check ATAC peaks with overlap
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 12: Enriched Hatmap showing the read coverage around the GCR motif occurrences')}
+#extract center of peaks
+peak_centers <- resize(ATACandGR, fix="center", width=140)
+
+#scan set of sequences for motif occurence
+moi <- motifmatchr::matchMotifs(motif2, subject = peak_centers, out="positions", p.cutoff=1e-5, genome=genome)[[1]]
+head(moi)
+
+#read signal around non-overlapping peaks
+sm2 <- signal2Matrix(tracks, moi, w=5, extend=500)
+smm2 <- list(Control=mergeSignalMatrices(sm2[grep("Control",names(sm2))]),
+            FSS=mergeSignalMatrices(sm2[grep("FSS",names(sm2))]))
+plotEnrichedHeatmaps(smm2, trim=0.95, colors = c("white","darkred"))
+
+#calculate motif occurence
+peaks_w_motif <- ATACandGR[overlapsAny(ATACandGR,moi)]
+length(peaks_w_motif) #55
+length(ATACandGR) #209
+length(peaks_w_motif)/length(ATACandGR) #0.2631579
+```
+
+The FSS group shows higher signal for the motif occurrences (Fig. 12). 26% of the accessible ATAC peaks that are bound by GR contain the specified GCR motif. 
+
+CLustering is performed using 3 clusters.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 13: Enriched Hatmap showing the read coverage around the motif occurrences for all clusters')}
+#cluster signal
+#set seed to ensure reproducibility of clustering
+set.seed(123)
+#clustering signal with kmeans into 3 clusters, the relative signal instead of absolute values is used
+cl <- epiwraps::clusterSignalMatrices(smm2, k=3, scaleRows = TRUE, seed=TRUE)
+
+#add cluster information to the GRanges object
+moi$clusters <- cl
+#regions
+#compare number of regions in each cluster
+table(cl)
+
+#define colors for clusters
+mycolors <-c("1"="slateblue3", "2"="sienna3", "3"="plum3", "4"="red", "5"="blue")
+#plot heatmap with clusters
+plotEnrichedHeatmaps(smm2, row_split=cl, mean_color = mycolors, colors=c("white", "darkred"), scale_row="global")
+```
+
+The motif occurrence seems to be similar over all clusters, showing enhanced signal in the center in the FSS group (Fig. 13).
+
+## check ATAC peaks without overlap
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 14: Enriched Hatmap showing the read coverage around the GCR motif occurrences')}
+#extract center of peaks
+peak_centers <- resize(ATAC_noex, fix="center", width=140)
+
+#find motif occurences
+seqlevelsStyle(ATAC_noex) <- "ensembl"
+
+#scan set of sequences for motif occurence
+moi <- motifmatchr::matchMotifs(motif2, subject = peak_centers, out="positions", p.cutoff=1e-5, genome=genome)[[1]]
+head(moi)
+
+#read signal around non-overlapping peaks
+sm2 <- signal2Matrix(tracks, moi, w=5, extend=500)
+smm2 <- list(Control=mergeSignalMatrices(sm2[grep("Control",names(sm2))]),
+            FSS=mergeSignalMatrices(sm2[grep("FSS",names(sm2))]))
+plotEnrichedHeatmaps(smm2, trim=0.95, colors = c("white","darkred"))
+
+#calculate motif occurence
+peaks_w_motif <- ATAC_noex[overlapsAny(ATAC_noex,moi)]
+length(peaks_w_motif) #124
+length(ATAC_noex) #651
+length(peaks_w_motif)/length(ATAC_noex) #0.1904762
+```
+
+The FSS group shows higher signal for the motif occurrences (Fig. 14). However, from the accessible ATAC peaks that are not bound by GR or MR, only 19% contain the specified GCR motif.
+
+CLustering is performed using 4 clusters.
+
+```{r, out.width=c('80%'), fig.align='center', fig.cap=c('FIGURE 15: Enriched Hatmap showing the read coverage around the motif occurrences for all clusters')}
+#cluster signal
+#set seed to ensure reproducibility of clustering
+set.seed(123)
+#clustering signal with kmeans into 4 clusters, the relative signal instead of absolute values is used
+cl <- epiwraps::clusterSignalMatrices(smm2, k=4, scaleRows = TRUE, seed=TRUE) #4 clusters explain 71% of variance
+
+#add cluster information to the GRanges object
+moi$clusters <- cl
+#regions
+#compare number of regions in each cluster
+table(cl)
+
+#define colors for clusters
+mycolors <-c("1"="slateblue3", "2"="sienna3", "3"="plum3", "4"="red", "5"="blue")
+#plot heatmap with clusters
+plotEnrichedHeatmaps(smm2, row_split=cl, mean_color = mycolors, colors=c("white", "darkred"), scale_row="global")
+```
+
+The motif occurrence seems to be similar over all clusters, showing enhanced signal in the center in the FSS group (Fig. 15). Smaller clusters (cluster 1) show a less smooth signal, which could be evaluated further. 
